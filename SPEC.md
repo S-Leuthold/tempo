@@ -160,24 +160,87 @@ CREATE TABLE goals (
 );
 ```
 
-### Pre-computed Aggregates
+### Deterministic Analysis Layer
 
-Rather than dumping raw data to the LLM, we compute summaries:
+Rather than dumping raw data to the LLM, we compute metrics and detect patterns first. Claude interprets pre-computed insights, not raw numbers.
 
-```sql
--- View for LLM context (last 14 days)
-CREATE VIEW recent_training_summary AS
-SELECT
-    date(started_at) as day,
-    activity_type,
-    SUM(duration_seconds) / 60.0 as total_minutes,
-    SUM(distance_meters) / 1000.0 as total_km,
-    AVG(average_heartrate) as avg_hr,
-    AVG(suffer_score) as avg_effort
-FROM workouts
-WHERE started_at > datetime('now', '-14 days')
-GROUP BY date(started_at), activity_type;
+#### Tier 1: Per-Workout Metrics (computed on sync)
+
+| Metric | Formula | Modality |
+|--------|---------|----------|
+| **Pace** | duration / distance → min/km | Run |
+| **Power** | average_watts | Ride |
+| **kJ** | watts × duration_sec / 1000 | Ride |
+| **rTSS** | (duration_min × (avg_hr/lthr)²) / 60 × 100 | Both |
+| **Time in Zone** | Classify by HR zone | Both |
+| **Efficiency** | pace/avg_hr (run) or watts/avg_hr (ride) | Both |
+| **Cardiac Cost** | avg_hr × duration_min | Both |
+
+#### Tier 2: Rolling Context (computed on demand)
+
+| Metric | Window |
+|--------|--------|
+| **Weekly volume** by modality | 7 days |
+| **Week-over-week delta** | vs prior |
+| **ATL (Acute Training Load)** | 7-day rTSS sum |
+| **CTL (Chronic Training Load)** | 42-day rTSS avg |
+| **TSB (Form)** | CTL - ATL |
+| **Intensity distribution** | 7-day zone % |
+| **Longest session** by modality | 28 days |
+| **Consistency** by modality | 28 days |
+
+#### Tier 3: Signals/Flags (boolean alerts)
+
+| Flag | Condition |
+|------|-----------|
+| `volume_spike` | >1.2× chronic + intensity up |
+| `volume_drop` | <0.7× chronic |
+| `hr_drift` | +4bpm at same output, 2 sessions |
+| `efficiency_gain` | +3% at same HR |
+| `long_run_gap` | No >10km run in 3 weeks |
+| `musculoskeletal_strain` | Cadence down + pace down + HR same |
+| `aerobic_regression` | Efficiency down 2 weeks + Z2% down |
+| `high_fatigue` | TSB < -20 |
+| `peak_form` | TSB between +5 and +15 |
+
+#### Context Package for Claude
+
+```json
+{
+  "workout": {
+    "type": "Run",
+    "duration_min": 44,
+    "distance_km": 6.0,
+    "pace_min_km": 7.3,
+    "avg_hr": 139,
+    "efficiency": 0.053,
+    "rTSS": 45,
+    "zone": "Z2"
+  },
+  "context": {
+    "weekly_volume_hrs": 5.2,
+    "week_over_week_change_pct": 12,
+    "atl": 280,
+    "ctl": 245,
+    "tsb": -35,
+    "intensity_distribution": {"Z1": 20, "Z2": 60, "Z3": 15, "Z4": 5},
+    "workout_number_this_week": 3,
+    "consistency_pct": 83
+  },
+  "flags": ["volume_spike", "high_fatigue"],
+  "user": {
+    "max_hr": 190,
+    "lthr": 170,
+    "training_days_per_week": 6
+  }
+}
 ```
+
+#### User Configuration Required
+
+- **max_hr**: Maximum heart rate (can estimate as 220 - age)
+- **lthr**: Lactate threshold heart rate (~93% of max_hr if unknown)
+- **training_days_per_week**: Expected workout frequency (default: 6)
 
 ## LLM Integration
 
@@ -310,7 +373,8 @@ Run once per week, looking at 7-28 day trends:
 - [x] Tauri app scaffold with menubar
 - [x] SQLite database setup
 - [x] Strava OAuth flow
-- [ ] Fetch and store workouts
+- [x] Fetch and store workouts
+- [ ] Deterministic analysis layer (Tier 1 metrics)
 - [ ] Basic LLM analysis (one workout)
 - [ ] Simple menubar dropdown showing latest analysis
 
