@@ -1,3 +1,4 @@
+mod analysis;
 mod db;
 mod models;
 mod commands;
@@ -40,6 +41,10 @@ pub fn run() {
       commands::strava::strava_refresh_tokens,
       commands::strava::strava_disconnect,
       commands::strava::strava_sync_activities,
+      commands::analysis::get_user_settings,
+      commands::analysis::update_user_settings,
+      commands::analysis::compute_workout_metrics,
+      commands::analysis::get_workouts_with_metrics,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
