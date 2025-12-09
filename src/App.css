@@ -215,6 +215,85 @@ button.secondary {
   color: #e74c3c;
 }
 
+/* Settings card */
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.card-header h2 {
+  margin: 0;
+}
+
+button.small {
+  padding: 4px 12px;
+  font-size: 0.85em;
+}
+
+.settings-form {
+  text-align: left;
+}
+
+.form-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.form-row label {
+  min-width: 70px;
+  font-weight: 500;
+}
+
+.form-row input {
+  flex: 1;
+}
+
+.settings-summary {
+  font-size: 0.9em;
+  color: #666;
+}
+
+.info {
+  font-size: 0.9em;
+  color: #666;
+  margin-bottom: 10px;
+}
+
+/* Workout metrics row */
+.workout-metrics {
+  display: flex;
+  gap: 12px;
+  margin-top: 6px;
+  font-size: 0.85em;
+}
+
+.hr-zone {
+  background: #e3f2fd;
+  color: #1565c0;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.rtss {
+  color: #7b1fa2;
+  font-weight: 500;
+}
+
+.pace {
+  color: #2e7d32;
+  font-weight: 500;
+}
+
+.power {
+  color: #f57c00;
+  font-weight: 500;
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     color: #f6f6f6;

@@ -172,6 +172,8 @@ pub async fn get_workouts_with_metrics(
 ) -> Result<Vec<WorkoutWithMetrics>, String> {
   let limit = limit.unwrap_or(50);
 
+  println!("Fetching workouts with limit: {}", limit);
+
   let rows: Vec<(
     i64, String, String, String, Option<i64>, Option<f64>,
     Option<i64>, Option<f64>, Option<f64>,
@@ -181,8 +183,10 @@ pub async fn get_workouts_with_metrics(
     r#"
     SELECT
       id, strava_id, activity_type, started_at,
-      duration_seconds, distance_meters, average_heartrate, average_watts, suffer_score,
-      pace_min_per_km, speed_kmh, kj, rtss, efficiency, cardiac_cost, hr_zone
+      duration_seconds, CAST(distance_meters AS REAL), average_heartrate,
+      CAST(average_watts AS REAL), CAST(suffer_score AS REAL),
+      CAST(pace_min_per_km AS REAL), CAST(speed_kmh AS REAL), CAST(kj AS REAL),
+      CAST(rtss AS REAL), CAST(efficiency AS REAL), CAST(cardiac_cost AS REAL), hr_zone
     FROM workouts
     ORDER BY started_at DESC
     LIMIT ?1
@@ -191,7 +195,12 @@ pub async fn get_workouts_with_metrics(
   .bind(limit)
   .fetch_all(&state.db)
   .await
-  .map_err(|e| format!("Failed to fetch workouts: {}", e))?;
+  .map_err(|e| {
+    println!("Query error: {}", e);
+    format!("Failed to fetch workouts: {}", e)
+  })?;
+
+  println!("Fetched {} rows", rows.len());
 
   let workouts = rows
     .into_iter()
