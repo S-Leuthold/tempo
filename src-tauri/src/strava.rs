@@ -335,17 +335,26 @@ fn build_error_response(error: &str) -> String {
 pub struct StravaActivity {
   pub id: i64,
   pub name: String,
-  #[serde(rename = "type")]
+  /// Strava uses "type" for legacy and "sport_type" for newer activities
+  #[serde(rename = "type", default)]
   pub activity_type: String,
   pub start_date: DateTime<Utc>,
+  #[serde(default)]
   pub elapsed_time: i64,
+  #[serde(default)]
   pub moving_time: i64,
+  #[serde(default)]
   pub distance: Option<f64>,
+  #[serde(default)]
   pub total_elevation_gain: Option<f64>,
+  #[serde(default)]
   pub average_heartrate: Option<f64>,
+  #[serde(default)]
   pub max_heartrate: Option<f64>,
+  #[serde(default)]
   pub average_watts: Option<f64>,
-  pub suffer_score: Option<i64>,
+  #[serde(default)]
+  pub suffer_score: Option<f64>,
 }
 
 /// Fetch recent activities from Strava
@@ -380,6 +389,16 @@ pub async fn fetch_activities(
     )));
   }
 
-  let activities: Vec<StravaActivity> = response.json().await?;
+  // Get raw text first for debugging
+  let response_text = response.text().await?;
+
+  // Try to parse, with better error message on failure
+  let activities: Vec<StravaActivity> = serde_json::from_str(&response_text)
+    .map_err(|e| {
+      eprintln!("Failed to parse Strava response: {}", e);
+      eprintln!("Raw response (first 1000 chars): {}", &response_text[..response_text.len().min(1000)]);
+      StravaError::OAuth(format!("Failed to parse activities: {}", e))
+    })?;
+
   Ok(activities)
 }
