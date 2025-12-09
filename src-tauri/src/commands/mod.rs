@@ -1,3 +1,5 @@
+pub mod strava;
+
 use crate::db::AppState;
 use crate::models::{Workout, SyncState};
 use std::sync::Arc;

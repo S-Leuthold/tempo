@@ -28,3 +28,9 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "chrono"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 chrono = { version = "0.4", features = ["serde"] }
 
+# HTTP client and OAuth
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+dotenvy = "0.15"
+url = "2"
+thiserror = "2"
+

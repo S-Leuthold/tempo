@@ -1,49 +1,99 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
+import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import "./App.css";
 
-function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+interface StravaAuthStatus {
+  is_authenticated: boolean;
+  expires_at: string | null;
+  needs_refresh: boolean;
+}
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
+function App() {
+  const [stravaStatus, setStravaStatus] = useState<StravaAuthStatus | null>(null);
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    checkStravaStatus();
+  }, []);
+
+  async function checkStravaStatus() {
+    try {
+      const status = await invoke<StravaAuthStatus>("strava_get_auth_status");
+      setStravaStatus(status);
+      setError(null);
+    } catch (e) {
+      setError(`Failed to check status: ${e}`);
+    }
+  }
+
+  async function connectStrava() {
+    setIsConnecting(true);
+    setError(null);
+
+    try {
+      // Get the authorization URL
+      const authUrl = await invoke<string>("strava_start_auth");
+
+      // Open browser for user to authorize
+      await openUrl(authUrl);
+
+      // Wait for callback and complete auth
+      await invoke("strava_complete_auth");
+
+      // Refresh status
+      await checkStravaStatus();
+    } catch (e) {
+      setError(`Connection failed: ${e}`);
+    } finally {
+      setIsConnecting(false);
+    }
+  }
+
+  async function disconnectStrava() {
+    try {
+      await invoke("strava_disconnect");
+      await checkStravaStatus();
+    } catch (e) {
+      setError(`Disconnect failed: ${e}`);
+    }
   }
 
   return (
     <main className="container">
-      <h1>Welcome to Tauri + React</h1>
+      <h1>Trainer Log</h1>
+      <p className="subtitle">Ambient training coach</p>
 
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
+      <div className="card">
+        <h2>Strava Connection</h2>
+
+        {stravaStatus === null ? (
+          <p>Loading...</p>
+        ) : stravaStatus.is_authenticated ? (
+          <div>
+            <p className="status connected">Connected</p>
+            {stravaStatus.expires_at && (
+              <p className="expires">
+                Token expires: {new Date(stravaStatus.expires_at).toLocaleString()}
+              </p>
+            )}
+            {stravaStatus.needs_refresh && (
+              <p className="warning">Token needs refresh</p>
+            )}
+            <button onClick={disconnectStrava}>Disconnect</button>
+          </div>
+        ) : (
+          <div>
+            <p className="status disconnected">Not connected</p>
+            <button onClick={connectStrava} disabled={isConnecting}>
+              {isConnecting ? "Connecting..." : "Connect Strava"}
+            </button>
+          </div>
+        )}
+
+        {error && <p className="error">{error}</p>}
       </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
     </main>
   );
 }

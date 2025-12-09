@@ -307,9 +307,9 @@ Run once per week, looking at 7-28 day trends:
 ## MVP Scope
 
 ### v0.1 - Core Loop
-- [ ] Tauri app scaffold with menubar
-- [ ] SQLite database setup
-- [ ] Strava OAuth flow
+- [x] Tauri app scaffold with menubar
+- [x] SQLite database setup
+- [x] Strava OAuth flow
 - [ ] Fetch and store workouts
 - [ ] Basic LLM analysis (one workout)
 - [ ] Simple menubar dropdown showing latest analysis
@@ -340,7 +340,7 @@ Run once per week, looking at 7-28 day trends:
 | App framework | Tauri | Native feel, small footprint, web-based charts |
 | Backend language | Rust (primary) | Single-language stack, spawns Python if needed |
 | Database | SQLite | Local-first, no server, good enough for years of data |
-| Frontend | TBD (React/Svelte) | Web tech for easy charting |
+| Frontend | React | Familiar ecosystem, plays nicely with Tauri |
 | LLM | Anthropic Claude API | Quality, reasonable cost for personal use |
 | Background sync | In-process timer | Simpler than launchd, sync while app running |
 

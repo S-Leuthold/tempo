@@ -95,6 +95,68 @@ button {
   margin-right: 5px;
 }
 
+.subtitle {
+  color: #888;
+  margin-top: -10px;
+}
+
+.card {
+  background: #ffffff;
+  border-radius: 12px;
+  padding: 24px;
+  margin: 20px auto;
+  max-width: 400px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.card h2 {
+  margin-top: 0;
+  font-size: 1.2em;
+}
+
+.status {
+  font-weight: 600;
+  padding: 8px 16px;
+  border-radius: 6px;
+  display: inline-block;
+}
+
+.status.connected {
+  background: #d4edda;
+  color: #155724;
+}
+
+.status.disconnected {
+  background: #f8d7da;
+  color: #721c24;
+}
+
+.expires {
+  font-size: 0.85em;
+  color: #666;
+}
+
+.warning {
+  color: #856404;
+  background: #fff3cd;
+  padding: 8px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+.error {
+  color: #721c24;
+  background: #f8d7da;
+  padding: 8px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     color: #f6f6f6;
@@ -112,5 +174,33 @@ button {
   }
   button:active {
     background-color: #0f0f0f69;
+  }
+
+  .card {
+    background: #3f3f3f;
+  }
+
+  .status.connected {
+    background: #1e4620;
+    color: #a3d9a5;
+  }
+
+  .status.disconnected {
+    background: #4a1a1a;
+    color: #f5c6cb;
+  }
+
+  .expires {
+    color: #aaa;
+  }
+
+  .warning {
+    background: #3d3520;
+    color: #ffd866;
+  }
+
+  .error {
+    background: #4a1a1a;
+    color: #f5c6cb;
   }
 }
