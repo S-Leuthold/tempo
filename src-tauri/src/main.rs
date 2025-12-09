@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    trainer_log_init_lib::run()
+    trainer_log_lib::run()
 }
