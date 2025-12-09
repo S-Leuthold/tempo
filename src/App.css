@@ -157,6 +157,64 @@ button:disabled {
   cursor: not-allowed;
 }
 
+button.secondary {
+  background: #e0e0e0;
+  color: #333;
+}
+
+.button-row {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin-top: 10px;
+}
+
+.sync-result {
+  color: #28a745;
+  font-size: 0.9em;
+  margin-top: 10px;
+}
+
+.workout-list {
+  text-align: left;
+}
+
+.workout-item {
+  padding: 12px;
+  border-bottom: 1px solid #eee;
+}
+
+.workout-item:last-child {
+  border-bottom: none;
+}
+
+.workout-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.workout-type {
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.workout-date {
+  color: #666;
+  font-size: 0.9em;
+}
+
+.workout-stats {
+  display: flex;
+  gap: 16px;
+  font-size: 0.9em;
+  color: #555;
+}
+
+.suffer-score {
+  color: #e74c3c;
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     color: #f6f6f6;

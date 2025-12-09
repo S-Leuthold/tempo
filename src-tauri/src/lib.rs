@@ -39,6 +39,7 @@ pub fn run() {
       commands::strava::strava_get_auth_status,
       commands::strava::strava_refresh_tokens,
       commands::strava::strava_disconnect,
+      commands::strava::strava_sync_activities,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

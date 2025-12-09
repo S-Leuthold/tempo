@@ -1,7 +1,7 @@
 use crate::db::AppState;
 use crate::strava::{
-  build_auth_url, exchange_code_for_tokens, refresh_tokens, wait_for_callback, StravaConfig,
-  StravaError, StravaTokens,
+  build_auth_url, exchange_code_for_tokens, fetch_activities, refresh_tokens, wait_for_callback,
+  StravaActivity, StravaConfig, StravaError, StravaTokens,
 };
 use chrono::Utc;
 use serde::Serialize;
@@ -173,4 +173,105 @@ async fn load_tokens(db: &crate::db::DbPool) -> Result<Option<StravaTokens>, Str
     })),
     _ => Ok(None),
   }
+}
+
+/// ---------------------------------------------------------------------------
+/// Sync Activities from Strava
+/// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+pub struct SyncResult {
+  pub new_activities: usize,
+  pub total_fetched: usize,
+}
+
+/// Sync recent activities from Strava and store them in the database
+#[tauri::command]
+pub async fn strava_sync_activities(
+  state: State<'_, Arc<AppState>>,
+) -> Result<SyncResult, StravaError> {
+  // Get valid access token (auto-refreshes if needed)
+  let access_token = get_valid_access_token(&state.db).await?;
+
+  // Get the timestamp of the most recent workout we have
+  let last_activity_timestamp: Option<i64> = sqlx::query_scalar(
+    "SELECT CAST(strftime('%s', MAX(started_at)) AS INTEGER) FROM workouts",
+  )
+  .fetch_one(&state.db)
+  .await
+  .map_err(|e| StravaError::Database(e.to_string()))?;
+
+  // Fetch activities from Strava (after our last known activity, or all if first sync)
+  let activities = fetch_activities(&access_token, last_activity_timestamp, 50).await?;
+  let total_fetched = activities.len();
+
+  // Store each activity in the database
+  let mut new_count = 0;
+  for activity in activities {
+    let inserted = save_activity(&state.db, &activity).await?;
+    if inserted {
+      new_count += 1;
+    }
+  }
+
+  // Update last sync time
+  update_sync_time(&state.db).await?;
+
+  println!(
+    "Strava sync complete: {} new activities (fetched {})",
+    new_count, total_fetched
+  );
+
+  Ok(SyncResult {
+    new_activities: new_count,
+    total_fetched,
+  })
+}
+
+/// Save a single activity to the database (returns true if inserted, false if already exists)
+async fn save_activity(
+  db: &crate::db::DbPool,
+  activity: &StravaActivity,
+) -> Result<bool, StravaError> {
+  let raw_json = serde_json::to_string(activity).unwrap_or_default();
+
+  let result = sqlx::query(
+    r#"
+    INSERT INTO workouts (
+      strava_id, activity_type, started_at, duration_seconds,
+      distance_meters, elevation_gain_meters, average_heartrate,
+      max_heartrate, average_watts, suffer_score, raw_json
+    )
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+    ON CONFLICT(strava_id) DO NOTHING
+    "#,
+  )
+  .bind(activity.id.to_string())
+  .bind(&activity.activity_type)
+  .bind(&activity.start_date)
+  .bind(activity.moving_time)
+  .bind(activity.distance)
+  .bind(activity.total_elevation_gain)
+  .bind(activity.average_heartrate.map(|hr| hr as i64))
+  .bind(activity.max_heartrate.map(|hr| hr as i64))
+  .bind(activity.average_watts)
+  .bind(activity.suffer_score)
+  .bind(&raw_json)
+  .execute(db)
+  .await
+  .map_err(|e| StravaError::Database(e.to_string()))?;
+
+  Ok(result.rows_affected() > 0)
+}
+
+/// Update the last sync time for Strava
+async fn update_sync_time(db: &crate::db::DbPool) -> Result<(), StravaError> {
+  sqlx::query(
+    "UPDATE sync_state SET last_sync_at = CURRENT_TIMESTAMP WHERE source = 'strava'",
+  )
+  .execute(db)
+  .await
+  .map_err(|e| StravaError::Database(e.to_string()))?;
+
+  Ok(())
 }

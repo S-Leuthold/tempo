@@ -13,6 +13,7 @@ use url::Url;
 
 const STRAVA_AUTH_URL: &str = "https://www.strava.com/oauth/authorize";
 const STRAVA_TOKEN_URL: &str = "https://www.strava.com/oauth/token";
+const STRAVA_API_BASE: &str = "https://www.strava.com/api/v3";
 const REDIRECT_PORT: u16 = 8765;
 const TOKEN_REFRESH_BUFFER_MINUTES: i64 = 5;
 
@@ -323,4 +324,62 @@ fn build_error_response(error: &str) -> String {
     body.len(),
     body
   )
+}
+
+/// ---------------------------------------------------------------------------
+/// Strava API - Activity Fetching
+/// ---------------------------------------------------------------------------
+
+/// Activity summary from Strava API
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StravaActivity {
+  pub id: i64,
+  pub name: String,
+  #[serde(rename = "type")]
+  pub activity_type: String,
+  pub start_date: DateTime<Utc>,
+  pub elapsed_time: i64,
+  pub moving_time: i64,
+  pub distance: Option<f64>,
+  pub total_elevation_gain: Option<f64>,
+  pub average_heartrate: Option<f64>,
+  pub max_heartrate: Option<f64>,
+  pub average_watts: Option<f64>,
+  pub suffer_score: Option<i64>,
+}
+
+/// Fetch recent activities from Strava
+pub async fn fetch_activities(
+  access_token: &str,
+  after: Option<i64>,
+  per_page: u32,
+) -> Result<Vec<StravaActivity>, StravaError> {
+  let client = Client::new();
+
+  let mut url = format!("{}/athlete/activities?per_page={}", STRAVA_API_BASE, per_page);
+
+  if let Some(after_timestamp) = after {
+    url.push_str(&format!("&after={}", after_timestamp));
+  }
+
+  let response = client
+    .get(&url)
+    .header("Authorization", format!("Bearer {}", access_token))
+    .send()
+    .await?;
+
+  if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+    return Err(StravaError::NotAuthenticated);
+  }
+
+  if !response.status().is_success() {
+    let error_text = response.text().await.unwrap_or_default();
+    return Err(StravaError::OAuth(format!(
+      "Failed to fetch activities: {}",
+      error_text
+    )));
+  }
+
+  let activities: Vec<StravaActivity> = response.json().await?;
+  Ok(activities)
 }
