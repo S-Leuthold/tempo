@@ -1,4 +1,5 @@
 pub mod analysis;
+pub mod progression;
 pub mod strava;
 
 use crate::db::AppState;

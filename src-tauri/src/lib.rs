@@ -51,6 +51,13 @@ pub fn run() {
       commands::analysis::analyze_workout,
       commands::analysis::get_workout_analysis,
       commands::analysis::get_latest_analysis,
+      // Progression commands
+      commands::progression::get_progression_dimensions,
+      commands::progression::get_progression_dimension,
+      commands::progression::progress_dimension,
+      commands::progression::regress_dimension,
+      commands::progression::touch_ceiling,
+      commands::progression::set_dimension_ceiling,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

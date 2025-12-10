@@ -1,175 +1,296 @@
-//! Progression Engine V2
+//! Ceiling-Based Progression Engine
 //!
-//! Deterministic progression tracking with per-dimension criteria.
-//! The LLM explains; Rust decides.
+//! Dimension-agnostic progression tracking where each dimension has:
+//! - current value
+//! - ceiling (max target for the goal)
+//! - step configuration (sequence or increment)
+//! - lifecycle status (building, at_ceiling, regressing)
+//!
+//! Key principles:
+//! - Criteria-driven, not calendar-driven
+//! - Ceilings prevent runaway progression
+//! - No compensatory volume - miss days = hold or regress
+//! - Cycling is regulated (TSB-based duration), not progressive
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sqlx::{Row, SqlitePool};
 
 use crate::analysis::{TrainingContext, TrainingFlags};
 
-/// ---------------------------------------------------------------------------
-/// Training Phase
-/// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Phase {
-    Foundation,   // Weeks 1-4: Build base, establish habits
-    Expansion,    // Weeks 5-8: Extend durations, progress intervals
-    Consolidation, // Weeks 9-12: Add quality, maintain volume
-}
-
-impl std::fmt::Display for Phase {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Phase::Foundation => write!(f, "foundation"),
-            Phase::Expansion => write!(f, "expansion"),
-            Phase::Consolidation => write!(f, "consolidation"),
-        }
-    }
-}
+#[cfg(test)]
+use chrono::Duration;
 
 /// ---------------------------------------------------------------------------
-/// Week Benchmark: What you should achieve by this week
+/// Dimension Type: Progressive vs Regulated
 /// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WeekBenchmark {
-    pub week_number: i32,
-    pub phase: Phase,
-
-    // Run targets
-    pub run_interval_target: String,      // "4:1", "5:1", "continuous_30"
-    pub long_run_target_min: i32,
-    pub midweek_run_target_min: Option<i32>,
-
-    // Cycling targets
-    pub z2_ride_target_min: i32,
-
-    // Quality work gates
-    pub quality_run_allowed: bool,
-    pub tempo_ride_allowed: bool,
-
-    // Progression gates
-    pub allow_interval_progression: bool,
-    pub allow_long_run_progression: bool,
-    pub allow_ride_duration_progression: bool,
-}
-
-impl Default for WeekBenchmark {
-    fn default() -> Self {
-        Self {
-            week_number: 1,
-            phase: Phase::Foundation,
-            run_interval_target: "4:1".to_string(),
-            long_run_target_min: 30,
-            midweek_run_target_min: None,
-            z2_ride_target_min: 45,
-            quality_run_allowed: false,
-            tempo_ride_allowed: false,
-            allow_interval_progression: true,
-            allow_long_run_progression: false,
-            allow_ride_duration_progression: false,
-        }
-    }
-}
-
-/// ---------------------------------------------------------------------------
-/// Progression State: Multi-Channel Current Status
-/// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProgressionState {
-    // Run Interval
-    pub run_interval_current: String,
-    pub run_interval_last_change: Option<DateTime<Utc>>,
-
-    // Long Run
-    pub long_run_current_min: i32,
-    pub long_run_last_change: Option<DateTime<Utc>>,
-
-    // Z2 Ride
-    pub z2_ride_current_min: i32,
-    pub z2_ride_last_change: Option<DateTime<Utc>>,
-
-    // Continuous Run (post-intervals)
-    pub continuous_run_current_min: Option<i32>,
-    pub continuous_run_last_change: Option<DateTime<Utc>>,
-
-    // Quality Run Level
-    pub quality_run_level: QualityRunLevel,
-    pub quality_run_last_change: Option<DateTime<Utc>>,
-
-    // Tracking
-    pub current_week: i32,
-    pub last_workout_date: Option<DateTime<Utc>>,
-    pub consecutive_rest_days: i32,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum QualityRunLevel {
-    None,
-    Z3_10min,
-    Z3_15min,
-    Z3_20min,
+pub enum DimensionType {
+    /// Progresses toward ceiling when criteria met (run intervals, long runs)
+    Progressive,
+    /// Duration regulated by TSB, power drifts naturally (cycling)
+    Regulated,
 }
 
-impl Default for QualityRunLevel {
+/// ---------------------------------------------------------------------------
+/// Lifecycle Status: Where are we in the progression journey
+/// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LifecycleStatus {
+    /// current < ceiling, working toward goal
+    Building,
+    /// current == ceiling, maintaining capability
+    AtCeiling,
+    /// Detraining detected, stepping back to rebuild
+    Regressing,
+}
+
+impl Default for LifecycleStatus {
     fn default() -> Self {
-        Self::None
+        Self::Building
     }
 }
 
-impl Default for ProgressionState {
-    fn default() -> Self {
-        Self {
-            run_interval_current: "4:1".to_string(),
-            run_interval_last_change: None,
-            long_run_current_min: 30,
-            long_run_last_change: None,
-            z2_ride_current_min: 45,
-            z2_ride_last_change: None,
-            continuous_run_current_min: None,
-            continuous_run_last_change: None,
-            quality_run_level: QualityRunLevel::None,
-            quality_run_last_change: None,
-            current_week: 1,
-            last_workout_date: None,
-            consecutive_rest_days: 0,
+impl std::fmt::Display for LifecycleStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Building => write!(f, "building"),
+            Self::AtCeiling => write!(f, "at_ceiling"),
+            Self::Regressing => write!(f, "regressing"),
+        }
+    }
+}
+
+impl std::str::FromStr for LifecycleStatus {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "building" => Ok(Self::Building),
+            "at_ceiling" => Ok(Self::AtCeiling),
+            "regressing" => Ok(Self::Regressing),
+            _ => Err(format!("Unknown lifecycle status: {}", s)),
         }
     }
 }
 
 /// ---------------------------------------------------------------------------
-/// Adherence Summary: Weekly Completion Tracking
+/// Step Configuration: How to progress values
+/// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum StepConfig {
+    /// Discrete sequence: ["4:1", "5:1", "6:1", ...]
+    Sequence { sequence: Vec<String> },
+    /// Linear increment: current + increment
+    Increment { increment: i32, unit: String },
+    /// Regulated: no progression, duration selected by TSB
+    Regulated { options: Vec<i32>, unit: String },
+}
+
+impl StepConfig {
+    pub fn from_json(json: &str) -> Result<Self, String> {
+        serde_json::from_str(json).map_err(|e| format!("Failed to parse step config: {}", e))
+    }
+
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+
+    /// Get the next value in the progression
+    pub fn next_value(&self, current: &str) -> Option<String> {
+        match self {
+            StepConfig::Sequence { sequence } => {
+                let idx = sequence.iter().position(|v| v == current)?;
+                sequence.get(idx + 1).cloned()
+            }
+            StepConfig::Increment { increment, .. } => {
+                let current_val: i32 = current.parse().ok()?;
+                Some((current_val + increment).to_string())
+            }
+            StepConfig::Regulated { .. } => None, // No progression for regulated
+        }
+    }
+
+    /// Get the previous value (for regression)
+    pub fn prev_value(&self, current: &str) -> Option<String> {
+        match self {
+            StepConfig::Sequence { sequence } => {
+                let idx = sequence.iter().position(|v| v == current)?;
+                if idx > 0 {
+                    sequence.get(idx - 1).cloned()
+                } else {
+                    None
+                }
+            }
+            StepConfig::Increment { increment, .. } => {
+                let current_val: i32 = current.parse().ok()?;
+                let prev = current_val - increment;
+                if prev > 0 {
+                    Some(prev.to_string())
+                } else {
+                    None
+                }
+            }
+            StepConfig::Regulated { .. } => None,
+        }
+    }
+
+    /// Check if value is at or beyond ceiling
+    pub fn is_at_ceiling(&self, current: &str, ceiling: &str) -> bool {
+        match self {
+            StepConfig::Sequence { sequence } => {
+                let current_idx = sequence.iter().position(|v| v == current);
+                let ceiling_idx = sequence.iter().position(|v| v == ceiling);
+                match (current_idx, ceiling_idx) {
+                    (Some(c), Some(ceil)) => c >= ceil,
+                    _ => current == ceiling,
+                }
+            }
+            StepConfig::Increment { .. } => {
+                let current_val: i32 = current.parse().unwrap_or(0);
+                let ceiling_val: i32 = ceiling.parse().unwrap_or(i32::MAX);
+                current_val >= ceiling_val
+            }
+            StepConfig::Regulated { .. } => true, // Regulated is always "at ceiling"
+        }
+    }
+
+    /// Get regulated duration based on TSB
+    pub fn get_regulated_duration(&self, tsb: Option<f64>) -> Option<i32> {
+        match self {
+            StepConfig::Regulated { options, .. } => {
+                let tsb_val = tsb.unwrap_or(0.0);
+                if options.len() >= 2 {
+                    if tsb_val >= 0.0 {
+                        // Fresh: longest duration
+                        options.last().copied()
+                    } else if tsb_val >= -10.0 {
+                        // Moderate fatigue: shorter duration
+                        options.first().copied()
+                    } else {
+                        // High fatigue: recovery spin (30-40 min or first option)
+                        Some(options.first().copied().unwrap_or(30).min(40))
+                    }
+                } else {
+                    options.first().copied()
+                }
+            }
+            _ => None,
+        }
+    }
+}
+
+/// ---------------------------------------------------------------------------
+/// Progression Dimension: Generic dimension from database
+/// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProgressionDimension {
+    pub id: i64,
+    pub name: String,
+    pub current_value: String,
+    pub ceiling_value: String,
+    pub step_config: StepConfig,
+    pub status: LifecycleStatus,
+    pub last_change_at: Option<DateTime<Utc>>,
+    pub last_ceiling_touch_at: Option<DateTime<Utc>>,
+    pub maintenance_cadence_days: i32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl ProgressionDimension {
+    /// Get the type of this dimension
+    pub fn dimension_type(&self) -> DimensionType {
+        match &self.step_config {
+            StepConfig::Regulated { .. } => DimensionType::Regulated,
+            _ => DimensionType::Progressive,
+        }
+    }
+
+    /// Check if this dimension is at its ceiling
+    pub fn is_at_ceiling(&self) -> bool {
+        self.step_config.is_at_ceiling(&self.current_value, &self.ceiling_value)
+    }
+
+    /// Get next progression value (None if at ceiling or regulated)
+    pub fn next_value(&self) -> Option<String> {
+        if self.is_at_ceiling() {
+            None
+        } else {
+            self.step_config.next_value(&self.current_value)
+        }
+    }
+
+    /// Get previous value for regression
+    pub fn prev_value(&self) -> Option<String> {
+        self.step_config.prev_value(&self.current_value)
+    }
+
+    /// Check if maintenance is due (at ceiling and haven't touched in cadence period)
+    pub fn maintenance_due(&self) -> bool {
+        if self.status != LifecycleStatus::AtCeiling {
+            return false;
+        }
+        match self.last_ceiling_touch_at {
+            Some(last_touch) => {
+                let days_since = (Utc::now() - last_touch).num_days();
+                days_since >= self.maintenance_cadence_days as i64
+            }
+            None => true, // Never touched ceiling, maintenance due
+        }
+    }
+
+    /// Check if regression is warranted (at ceiling but haven't touched in 21+ days)
+    pub fn should_regress(&self) -> bool {
+        if self.status != LifecycleStatus::AtCeiling {
+            return false;
+        }
+        match self.last_ceiling_touch_at {
+            Some(last_touch) => {
+                let days_since = (Utc::now() - last_touch).num_days();
+                days_since >= 21 // 3 weeks without ceiling touch = regression
+            }
+            None => false, // Can't regress if we've never reached ceiling
+        }
+    }
+
+    /// Days since last change
+    pub fn days_since_change(&self) -> i64 {
+        self.last_change_at
+            .map(|d| (Utc::now() - d).num_days())
+            .unwrap_or(30)
+    }
+
+    /// Get regulated duration for cycling based on TSB
+    pub fn get_regulated_duration(&self, tsb: Option<f64>) -> Option<i32> {
+        self.step_config.get_regulated_duration(tsb)
+    }
+}
+
+/// ---------------------------------------------------------------------------
+/// Adherence Summary (preserved from original)
 /// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdherenceSummary {
-    /// Expected workouts per week (from plan structure)
     pub total_expected: u8,
-    /// Completed workouts this week
     pub total_completed: u8,
-    /// Key sessions expected (long run, one midweek run, one ride)
     pub key_expected: u8,
-    /// Key sessions completed
     pub key_completed: u8,
-    /// Adherence percentage (total_completed / total_expected)
     pub adherence_pct: f32,
-    /// True if all key sessions completed
     pub key_adherence_good: bool,
-    /// True if adherence_pct >= 0.75 AND key_adherence_good
     pub week_stable: bool,
-    /// Number of missed workouts this week
     pub missed_workouts: u8,
-    /// Consecutive weeks with < 70% adherence
     pub consecutive_low_adherence_weeks: u8,
 }
 
 impl AdherenceSummary {
-    /// Compute adherence summary from workout counts
     pub fn compute(
         total_expected: u8,
         total_completed: u8,
@@ -200,12 +321,10 @@ impl AdherenceSummary {
         }
     }
 
-    /// Returns true if the week is unstable (< 70% adherence)
     pub fn is_unstable(&self) -> bool {
         self.adherence_pct < 0.7
     }
 
-    /// Returns true if regression might be warranted (2+ consecutive low weeks)
     pub fn should_consider_regression(&self) -> bool {
         self.consecutive_low_adherence_weeks >= 2
     }
@@ -228,577 +347,569 @@ impl Default for AdherenceSummary {
 }
 
 /// ---------------------------------------------------------------------------
-/// Dimension: The three progression tracks
-/// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Dimension {
-    RunInterval,
-    LongRun,
-    Z2Ride,
-}
-
-/// ---------------------------------------------------------------------------
-/// Criteria: Per-Dimension Requirements for Progression
-/// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DimensionCriteria {
-    pub dimension: Dimension,
-
-    // Shared criteria
-    pub days_since_change: i32,
-    pub min_days_required: i32,  // Usually 7
-    pub volume_stable: bool,
-    pub fatigue_low: bool,       // TSB > threshold
-
-    // Dimension-specific
-    pub hr_stability: bool,      // For run_interval: very sensitive
-    pub pain_free: bool,         // For run_interval: hard gate
-
-    // Result
-    pub criteria_met: bool,
-}
-
-impl DimensionCriteria {
-    /// Compute criteria for run interval progression
-    pub fn for_run_interval(
-        state: &ProgressionState,
-        context: &TrainingContext,
-        flags: &TrainingFlags,
-    ) -> Self {
-        let days_since_change = state
-            .run_interval_last_change
-            .map(|d| (Utc::now() - d).num_days() as i32)
-            .unwrap_or(30);
-
-        let volume_stable = !flags.volume_spike && !flags.volume_drop;
-        let fatigue_low = context.tsb.map_or(true, |tsb| tsb > -15.0);
-        let hr_stability = !flags.intensity_heavy;
-        let pain_free = true; // TODO: manual input
-
-        let criteria_met = days_since_change >= 7
-            && volume_stable
-            && fatigue_low
-            && hr_stability
-            && pain_free;
-
-        Self {
-            dimension: Dimension::RunInterval,
-            days_since_change,
-            min_days_required: 7,
-            volume_stable,
-            fatigue_low,
-            hr_stability,
-            pain_free,
-            criteria_met,
-        }
-    }
-
-    /// Compute criteria for long run progression
-    pub fn for_long_run(
-        state: &ProgressionState,
-        context: &TrainingContext,
-        flags: &TrainingFlags,
-    ) -> Self {
-        let days_since_change = state
-            .long_run_last_change
-            .map(|d| (Utc::now() - d).num_days() as i32)
-            .unwrap_or(30);
-
-        let volume_stable = !flags.volume_spike && !flags.volume_drop;
-        let fatigue_low = context.tsb.map_or(true, |tsb| tsb > -15.0);
-        // Long run is more tolerant of minor HR issues
-        let hr_stability = true;
-        let pain_free = true;
-
-        let criteria_met = days_since_change >= 7 && volume_stable && fatigue_low;
-
-        Self {
-            dimension: Dimension::LongRun,
-            days_since_change,
-            min_days_required: 7,
-            volume_stable,
-            fatigue_low,
-            hr_stability,
-            pain_free,
-            criteria_met,
-        }
-    }
-
-    /// Compute criteria for Z2 ride duration progression
-    pub fn for_z2_ride(
-        state: &ProgressionState,
-        context: &TrainingContext,
-        flags: &TrainingFlags,
-    ) -> Self {
-        let days_since_change = state
-            .z2_ride_last_change
-            .map(|d| (Utc::now() - d).num_days() as i32)
-            .unwrap_or(30);
-
-        let volume_stable = !flags.volume_spike;
-        // Cycling is primarily bound by fatigue, more tolerant threshold
-        let fatigue_low = context.tsb.map_or(true, |tsb| tsb > -10.0);
-        let hr_stability = true;
-        let pain_free = true;
-
-        let criteria_met = days_since_change >= 7 && volume_stable && fatigue_low;
-
-        Self {
-            dimension: Dimension::Z2Ride,
-            days_since_change,
-            min_days_required: 7,
-            volume_stable,
-            fatigue_low,
-            hr_stability,
-            pain_free,
-            criteria_met,
-        }
-    }
-}
-
-/// ---------------------------------------------------------------------------
-/// Assessment: READY | HOLD | REGRESS
-/// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Assessment {
-    Ready,
-    Hold,
-    Regress,
-}
-
-/// ---------------------------------------------------------------------------
-/// Engine Decision: What Rust actually allows
+/// Engine Decision: What Rust allows
 /// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EngineDecision {
-    ProgressAllowed,           // All criteria met, plan allows, no conflicts
-    HoldForNow,                // Criteria met but blocked by plan or overlap rule
+    ProgressAllowed,           // Criteria met, can advance
+    AtCeiling,                 // At max, maintenance mode
+    MaintenanceDue,            // At ceiling but need to touch it soon
+    HoldForNow,                // Criteria met but blocked by overlap rule
     HoldDueToUnstableWeek,     // Week had < 70% adherence
-    HoldDueToMissedKeySession, // Key session (e.g., long run) missed
+    HoldDueToMissedKeySession, // Key session missed
     Hold,                      // Criteria not met
-    Regress,                   // Significant regression needed
+    Regress,                   // Step back due to detraining
+    Regulated,                 // Dimension is regulated, not progressive
 }
 
 /// ---------------------------------------------------------------------------
-/// Dimension Status: Complete status for one progression track
+/// Dimension Status: Status for one progression track
 /// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DimensionStatus {
-    pub dimension: Dimension,
-    pub current: String,          // Current value as string (e.g., "4:1", "45")
-    pub target_for_week: String,  // Target for this week per plan
-    pub assessment: Assessment,   // Raw criteria-based assessment
-    pub engine_decision: EngineDecision,  // Final decision after plan + overlap rules
-    pub reason: String,           // Human-readable explanation
-    pub next_value: Option<String>, // What it would progress to
+    pub name: String,
+    pub dimension_type: DimensionType,
+    pub current: String,
+    pub ceiling: String,
+    pub status: LifecycleStatus,
+    pub engine_decision: EngineDecision,
+    pub reason: String,
+    pub next_value: Option<String>,
+    pub days_since_change: i64,
+    pub maintenance_due: bool,
+    /// For regulated dimensions: recommended duration based on TSB
+    pub regulated_duration: Option<i32>,
 }
 
 /// ---------------------------------------------------------------------------
-/// Plan Status: ahead / on_track / behind
-/// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PlanAlignment {
-    Ahead,
-    OnTrack,
-    Behind,
-}
-
-/// ---------------------------------------------------------------------------
-/// Progression Summary: The stable interface sent to the LLM
+/// Progression Summary: Sent to LLM
 /// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProgressionSummary {
-    pub current_week: i32,
-    pub phase: Phase,
-
-    // Per-dimension status
-    pub run_interval: DimensionStatus,
-    pub long_run: DimensionStatus,
-    pub z2_ride: DimensionStatus,
-
-    // Overall plan alignment
-    pub plan_alignment: PlanAlignment,
-
-    // Which dimension was most recently progressed (for overlap rule)
-    pub last_progression_dimension: Option<Dimension>,
-    pub days_since_any_progression: i32,
-
-    // Adherence (missing a day ≠ moral failure; it's a load signal)
+    pub dimensions: Vec<DimensionStatus>,
+    pub last_progression_dimension: Option<String>,
+    pub days_since_any_progression: i64,
     pub adherence: AdherenceSummary,
 }
 
 impl ProgressionSummary {
-    /// Compute the full progression summary
+    /// Compute progression summary for all dimensions
     pub fn compute(
-        state: &ProgressionState,
-        benchmark: &WeekBenchmark,
+        dimensions: &[ProgressionDimension],
         context: &TrainingContext,
         flags: &TrainingFlags,
         adherence: AdherenceSummary,
     ) -> Self {
-        // Compute criteria for each dimension
-        let interval_criteria = DimensionCriteria::for_run_interval(state, context, flags);
-        let long_run_criteria = DimensionCriteria::for_long_run(state, context, flags);
-        let z2_ride_criteria = DimensionCriteria::for_z2_ride(state, context, flags);
-
-        // Find most recent progression for overlap rule
-        let last_changes = [
-            (Dimension::RunInterval, state.run_interval_last_change),
-            (Dimension::LongRun, state.long_run_last_change),
-            (Dimension::Z2Ride, state.z2_ride_last_change),
-        ];
-        let most_recent = last_changes
+        // Find most recent progression (for overlap rule)
+        let most_recent = dimensions
             .iter()
-            .filter_map(|(dim, date)| date.map(|d| (*dim, d)))
-            .max_by_key(|(_, d)| *d);
+            .filter_map(|d| d.last_change_at.map(|dt| (d.name.clone(), dt)))
+            .max_by_key(|(_, dt)| *dt);
 
-        let last_progression_dimension = most_recent.map(|(dim, _)| dim);
+        let last_progression_dimension = most_recent.as_ref().map(|(name, _)| name.clone());
         let days_since_any_progression = most_recent
-            .map(|(_, d)| (Utc::now() - d).num_days() as i32)
+            .map(|(_, dt)| (Utc::now() - dt).num_days())
             .unwrap_or(30);
 
-        // Build dimension statuses with overlap rule and adherence enforcement
-        let run_interval = Self::build_interval_status(
-            state,
-            benchmark,
-            &interval_criteria,
-            last_progression_dimension,
-            days_since_any_progression,
-            &adherence,
-        );
-        let long_run = Self::build_long_run_status(
-            state,
-            benchmark,
-            &long_run_criteria,
-            last_progression_dimension,
-            days_since_any_progression,
-            &adherence,
-        );
-        let z2_ride = Self::build_z2_ride_status(
-            state,
-            benchmark,
-            &z2_ride_criteria,
-            last_progression_dimension,
-            days_since_any_progression,
-            &adherence,
-        );
-
-        // Overall plan alignment
-        let plan_alignment = Self::compute_alignment(state, benchmark);
+        // Build status for each dimension
+        let dimension_statuses: Vec<DimensionStatus> = dimensions
+            .iter()
+            .map(|dim| {
+                Self::build_dimension_status(
+                    dim,
+                    context,
+                    flags,
+                    &adherence,
+                    &last_progression_dimension,
+                    days_since_any_progression,
+                )
+            })
+            .collect();
 
         Self {
-            current_week: state.current_week,
-            phase: benchmark.phase,
-            run_interval,
-            long_run,
-            z2_ride,
-            plan_alignment,
+            dimensions: dimension_statuses,
             last_progression_dimension,
             days_since_any_progression,
             adherence,
         }
     }
 
-    fn build_interval_status(
-        state: &ProgressionState,
-        benchmark: &WeekBenchmark,
-        criteria: &DimensionCriteria,
-        last_dim: Option<Dimension>,
-        days_since_any: i32,
+    fn build_dimension_status(
+        dim: &ProgressionDimension,
+        context: &TrainingContext,
+        flags: &TrainingFlags,
         adherence: &AdherenceSummary,
+        last_prog_dim: &Option<String>,
+        days_since_any: i64,
     ) -> DimensionStatus {
-        let current = state.run_interval_current.clone();
-        let target = benchmark.run_interval_target.clone();
-        let next = Self::next_interval(&current);
+        let dim_type = dim.dimension_type();
 
-        // Check if at or beyond target
-        let at_target = Self::interval_gte(&current, &target);
+        // For regulated dimensions (cycling), just report current state
+        if dim_type == DimensionType::Regulated {
+            let regulated_duration = dim.get_regulated_duration(context.tsb);
+            let tsb_desc = match context.tsb {
+                Some(t) if t >= 0.0 => "fresh",
+                Some(t) if t >= -10.0 => "moderate fatigue",
+                Some(_) => "fatigued",
+                None => "unknown fatigue",
+            };
 
-        // Raw assessment (before adherence gates)
-        let assessment = if state.consecutive_rest_days > 3 && current != "4:1" {
-            Assessment::Regress
-        } else if adherence.should_consider_regression() && current != "4:1" {
-            Assessment::Regress
-        } else if at_target {
-            Assessment::Hold
-        } else if criteria.criteria_met {
-            Assessment::Ready
-        } else {
-            Assessment::Hold
-        };
+            return DimensionStatus {
+                name: dim.name.clone(),
+                dimension_type: dim_type,
+                current: dim.current_value.clone(),
+                ceiling: dim.ceiling_value.clone(),
+                status: LifecycleStatus::AtCeiling, // Regulated = always at "ceiling"
+                engine_decision: EngineDecision::Regulated,
+                reason: format!(
+                    "Duration regulated by TSB ({}): {} min recommended",
+                    tsb_desc,
+                    regulated_duration.unwrap_or(45)
+                ),
+                next_value: None,
+                days_since_change: dim.days_since_change(),
+                maintenance_due: false,
+                regulated_duration,
+            };
+        }
 
-        // Apply plan gate
-        let plan_allows = benchmark.allow_interval_progression;
+        // Progressive dimension logic
+        let is_at_ceiling = dim.is_at_ceiling();
+        let maintenance_due = dim.maintenance_due();
+        let should_regress = dim.should_regress();
+
+        // Check dimension-specific criteria
+        let (criteria_met, criteria_reason) =
+            Self::check_criteria(&dim.name, dim, context, flags);
 
         // Apply overlap rule: if another dimension progressed in last 7 days, hold
-        let overlap_blocked = last_dim.map_or(false, |dim| {
-            dim != Dimension::RunInterval && days_since_any < 7
+        let overlap_blocked = last_prog_dim.as_ref().map_or(false, |last| {
+            last != &dim.name && days_since_any < 7
         });
 
-        // Final engine decision (adherence gates applied here)
-        let (engine_decision, reason) = if assessment == Assessment::Regress {
-            if adherence.should_consider_regression() {
-                (EngineDecision::Regress, format!("{} consecutive low-adherence weeks", adherence.consecutive_low_adherence_weeks))
+        // Determine engine decision
+        let (engine_decision, reason) = if should_regress {
+            (
+                EngineDecision::Regress,
+                format!(
+                    "Haven't touched ceiling in {} days, stepping back",
+                    dim.last_ceiling_touch_at
+                        .map(|d| (Utc::now() - d).num_days())
+                        .unwrap_or(0)
+                ),
+            )
+        } else if adherence.should_consider_regression() && dim.prev_value().is_some() {
+            (
+                EngineDecision::Regress,
+                format!(
+                    "{} consecutive low-adherence weeks",
+                    adherence.consecutive_low_adherence_weeks
+                ),
+            )
+        } else if is_at_ceiling {
+            if maintenance_due {
+                (
+                    EngineDecision::MaintenanceDue,
+                    format!(
+                        "At ceiling ({}), maintenance due - touch this level soon",
+                        dim.ceiling_value
+                    ),
+                )
             } else {
-                (EngineDecision::Regress, format!("{} consecutive rest days", state.consecutive_rest_days))
+                (
+                    EngineDecision::AtCeiling,
+                    format!("At ceiling ({}), maintaining", dim.ceiling_value),
+                )
             }
-        } else if at_target {
-            (EngineDecision::Hold, "Already at target for this week".to_string())
         } else if adherence.is_unstable() {
-            (EngineDecision::HoldDueToUnstableWeek, format!("Week had {}% adherence (need 70%)", (adherence.adherence_pct * 100.0) as i32))
-        } else if !plan_allows {
-            (EngineDecision::HoldForNow, "Plan doesn't allow interval progression this week".to_string())
+            (
+                EngineDecision::HoldDueToUnstableWeek,
+                format!(
+                    "Week had {}% adherence (need 70%)",
+                    (adherence.adherence_pct * 100.0) as i32
+                ),
+            )
+        } else if !adherence.key_adherence_good && is_key_session_dimension(&dim.name) {
+            (
+                EngineDecision::HoldDueToMissedKeySession,
+                "Key session missed this week".to_string(),
+            )
         } else if overlap_blocked {
-            (EngineDecision::HoldForNow, format!("Another dimension progressed {} days ago (need 7)", days_since_any))
-        } else if !criteria.criteria_met {
-            let mut reasons = Vec::new();
-            if criteria.days_since_change < 7 {
-                reasons.push(format!("{} days since last change (need 7)", criteria.days_since_change));
-            }
-            if !criteria.volume_stable { reasons.push("volume unstable".to_string()); }
-            if !criteria.fatigue_low { reasons.push("fatigue high".to_string()); }
-            if !criteria.hr_stability { reasons.push("HR unstable".to_string()); }
-            (EngineDecision::Hold, reasons.join(", "))
+            (
+                EngineDecision::HoldForNow,
+                format!(
+                    "Another dimension progressed {} days ago (need 7)",
+                    days_since_any
+                ),
+            )
+        } else if !criteria_met {
+            (EngineDecision::Hold, criteria_reason)
         } else if !adherence.week_stable {
-            // Criteria met but week not stable (key session missed or < 75%)
-            (EngineDecision::HoldForNow, "Week not stable (missed sessions or low adherence)".to_string())
+            (
+                EngineDecision::HoldForNow,
+                "Week not stable (missed sessions or low adherence)".to_string(),
+            )
         } else {
             (EngineDecision::ProgressAllowed, "All criteria met".to_string())
         };
 
         DimensionStatus {
-            dimension: Dimension::RunInterval,
-            current,
-            target_for_week: target,
-            assessment,
+            name: dim.name.clone(),
+            dimension_type: dim_type,
+            current: dim.current_value.clone(),
+            ceiling: dim.ceiling_value.clone(),
+            status: dim.status,
             engine_decision,
             reason,
-            next_value: Some(next),
+            next_value: dim.next_value(),
+            days_since_change: dim.days_since_change(),
+            maintenance_due,
+            regulated_duration: None,
         }
     }
 
-    fn build_long_run_status(
-        state: &ProgressionState,
-        benchmark: &WeekBenchmark,
-        criteria: &DimensionCriteria,
-        last_dim: Option<Dimension>,
-        days_since_any: i32,
-        adherence: &AdherenceSummary,
-    ) -> DimensionStatus {
-        let current = state.long_run_current_min;
-        let target = benchmark.long_run_target_min;
-        let next = current + 5;
+    /// Check dimension-specific criteria
+    fn check_criteria(
+        name: &str,
+        dim: &ProgressionDimension,
+        context: &TrainingContext,
+        flags: &TrainingFlags,
+    ) -> (bool, String) {
+        let days_since_change = dim.days_since_change();
+        let min_days = 7;
 
-        let at_target = current >= target;
+        let volume_stable = !flags.volume_spike && !flags.volume_drop;
 
-        // Raw assessment (before adherence gates)
-        let assessment = if state.consecutive_rest_days > 5 && current > 30 {
-            Assessment::Regress
-        } else if adherence.should_consider_regression() && current > 30 {
-            Assessment::Regress
-        } else if at_target {
-            Assessment::Hold
-        } else if criteria.criteria_met {
-            Assessment::Ready
-        } else {
-            Assessment::Hold
+        // Fatigue thresholds vary by dimension
+        let (fatigue_low, fatigue_threshold) = match name {
+            "run_interval" => (context.tsb.map_or(true, |t| t > -15.0), -15.0),
+            "long_run" => (context.tsb.map_or(true, |t| t > -15.0), -15.0),
+            _ => (context.tsb.map_or(true, |t| t > -10.0), -10.0),
         };
 
-        let plan_allows = benchmark.allow_long_run_progression;
-        let overlap_blocked = last_dim.map_or(false, |dim| {
-            dim != Dimension::LongRun && days_since_any < 7
+        // HR stability matters more for run intervals
+        let hr_stability = if name == "run_interval" {
+            !flags.intensity_heavy
+        } else {
+            true
+        };
+
+        let criteria_met =
+            days_since_change >= min_days && volume_stable && fatigue_low && hr_stability;
+
+        if criteria_met {
+            (true, "All criteria met".to_string())
+        } else {
+            let mut reasons = Vec::new();
+            if days_since_change < min_days {
+                reasons.push(format!(
+                    "{} days since last change (need {})",
+                    days_since_change, min_days
+                ));
+            }
+            if !volume_stable {
+                reasons.push("volume unstable".to_string());
+            }
+            if !fatigue_low {
+                reasons.push(format!(
+                    "TSB too low ({:.1}, need > {:.1})",
+                    context.tsb.unwrap_or(0.0),
+                    fatigue_threshold
+                ));
+            }
+            if !hr_stability {
+                reasons.push("HR/intensity unstable".to_string());
+            }
+            (false, reasons.join(", "))
+        }
+    }
+
+    /// Get status for a specific dimension by name
+    pub fn get_dimension(&self, name: &str) -> Option<&DimensionStatus> {
+        self.dimensions.iter().find(|d| d.name == name)
+    }
+}
+
+/// Check if a dimension is a "key session" for adherence purposes
+fn is_key_session_dimension(name: &str) -> bool {
+    matches!(name, "long_run")
+}
+
+/// ---------------------------------------------------------------------------
+/// Database Operations
+/// ---------------------------------------------------------------------------
+
+/// Load all progression dimensions from database
+pub async fn load_all_dimensions(pool: &SqlitePool) -> Result<Vec<ProgressionDimension>, String> {
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            id, name, current_value, ceiling_value, step_config_json,
+            status, last_change_at, last_ceiling_touch_at,
+            maintenance_cadence_days, created_at, updated_at
+        FROM progression_dimensions
+        ORDER BY id
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to load dimensions: {}", e))?;
+
+    let mut dimensions = Vec::new();
+    for row in rows {
+        let step_config_json: String = row.get("step_config_json");
+        let step_config = StepConfig::from_json(&step_config_json)?;
+        let status_str: String = row.get("status");
+        let status: LifecycleStatus = status_str.parse().unwrap_or_default();
+
+        let last_change_at: Option<String> = row.get("last_change_at");
+        let last_ceiling_touch_at: Option<String> = row.get("last_ceiling_touch_at");
+        let created_at: Option<String> = row.get("created_at");
+        let updated_at: Option<String> = row.get("updated_at");
+
+        dimensions.push(ProgressionDimension {
+            id: row.get("id"),
+            name: row.get("name"),
+            current_value: row.get("current_value"),
+            ceiling_value: row.get("ceiling_value"),
+            step_config,
+            status,
+            last_change_at: last_change_at.and_then(|s| {
+                DateTime::parse_from_rfc3339(&s)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .ok()
+            }),
+            last_ceiling_touch_at: last_ceiling_touch_at.and_then(|s| {
+                DateTime::parse_from_rfc3339(&s)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .ok()
+            }),
+            maintenance_cadence_days: row
+                .try_get::<i32, _>("maintenance_cadence_days")
+                .unwrap_or(14),
+            created_at: created_at
+                .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or_else(Utc::now),
+            updated_at: updated_at
+                .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or_else(Utc::now),
         });
-
-        // Final engine decision (adherence gates applied here)
-        // Long run is especially sensitive to key session adherence
-        let (engine_decision, reason) = if assessment == Assessment::Regress {
-            if adherence.should_consider_regression() {
-                (EngineDecision::Regress, format!("{} consecutive low-adherence weeks", adherence.consecutive_low_adherence_weeks))
-            } else {
-                (EngineDecision::Regress, format!("{} consecutive rest days", state.consecutive_rest_days))
-            }
-        } else if at_target {
-            (EngineDecision::Hold, "Already at target for this week".to_string())
-        } else if !adherence.key_adherence_good {
-            // Long run missed? Can't progress long run dimension
-            (EngineDecision::HoldDueToMissedKeySession, "Key session missed this week (long run requires completion)".to_string())
-        } else if adherence.is_unstable() {
-            (EngineDecision::HoldDueToUnstableWeek, format!("Week had {}% adherence (need 70%)", (adherence.adherence_pct * 100.0) as i32))
-        } else if !plan_allows {
-            (EngineDecision::HoldForNow, "Plan doesn't allow long run progression this week".to_string())
-        } else if overlap_blocked {
-            (EngineDecision::HoldForNow, format!("Another dimension progressed {} days ago (need 7)", days_since_any))
-        } else if !criteria.criteria_met {
-            let mut reasons = Vec::new();
-            if criteria.days_since_change < 7 {
-                reasons.push(format!("{} days since last change", criteria.days_since_change));
-            }
-            if !criteria.volume_stable { reasons.push("volume unstable".to_string()); }
-            if !criteria.fatigue_low { reasons.push("fatigue high".to_string()); }
-            (EngineDecision::Hold, reasons.join(", "))
-        } else if !adherence.week_stable {
-            (EngineDecision::HoldForNow, "Week not stable (missed sessions or low adherence)".to_string())
-        } else {
-            (EngineDecision::ProgressAllowed, "All criteria met".to_string())
-        };
-
-        DimensionStatus {
-            dimension: Dimension::LongRun,
-            current: format!("{}min", current),
-            target_for_week: format!("{}min", target),
-            assessment,
-            engine_decision,
-            reason,
-            next_value: Some(format!("{}min", next)),
-        }
     }
 
-    fn build_z2_ride_status(
-        state: &ProgressionState,
-        benchmark: &WeekBenchmark,
-        criteria: &DimensionCriteria,
-        last_dim: Option<Dimension>,
-        days_since_any: i32,
-        adherence: &AdherenceSummary,
-    ) -> DimensionStatus {
-        let current = state.z2_ride_current_min;
-        let target = benchmark.z2_ride_target_min;
-        let next = current + 10;
+    Ok(dimensions)
+}
 
-        let at_target = current >= target;
+/// Load a single dimension by name
+pub async fn load_dimension(
+    pool: &SqlitePool,
+    name: &str,
+) -> Result<ProgressionDimension, String> {
+    let dimensions = load_all_dimensions(pool).await?;
+    dimensions
+        .into_iter()
+        .find(|d| d.name == name)
+        .ok_or_else(|| format!("Dimension not found: {}", name))
+}
 
-        let assessment = if at_target {
-            Assessment::Hold
-        } else if criteria.criteria_met {
-            Assessment::Ready
-        } else {
-            Assessment::Hold
-        };
+/// Save a dimension back to database
+pub async fn save_dimension(pool: &SqlitePool, dim: &ProgressionDimension) -> Result<(), String> {
+    let step_config_json = dim.step_config.to_json();
+    let status_str = dim.status.to_string();
+    let last_change_str = dim.last_change_at.map(|d| d.to_rfc3339());
+    let last_ceiling_str = dim.last_ceiling_touch_at.map(|d| d.to_rfc3339());
+    let updated_at = Utc::now().to_rfc3339();
 
-        let plan_allows = benchmark.allow_ride_duration_progression;
-        let overlap_blocked = last_dim.map_or(false, |dim| {
-            dim != Dimension::Z2Ride && days_since_any < 7
-        });
+    sqlx::query(
+        r#"
+        UPDATE progression_dimensions
+        SET current_value = ?,
+            ceiling_value = ?,
+            step_config_json = ?,
+            status = ?,
+            last_change_at = ?,
+            last_ceiling_touch_at = ?,
+            maintenance_cadence_days = ?,
+            updated_at = ?
+        WHERE name = ?
+        "#,
+    )
+    .bind(&dim.current_value)
+    .bind(&dim.ceiling_value)
+    .bind(&step_config_json)
+    .bind(&status_str)
+    .bind(&last_change_str)
+    .bind(&last_ceiling_str)
+    .bind(dim.maintenance_cadence_days)
+    .bind(&updated_at)
+    .bind(&dim.name)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to save dimension: {}", e))?;
 
-        // Final engine decision (adherence gates applied here)
-        // Cycling is somewhat more tolerant but still respects unstable weeks
-        let (engine_decision, reason) = if at_target {
-            (EngineDecision::Hold, "Already at target for this week".to_string())
-        } else if adherence.is_unstable() {
-            (EngineDecision::HoldDueToUnstableWeek, format!("Week had {}% adherence (need 70%)", (adherence.adherence_pct * 100.0) as i32))
-        } else if !plan_allows {
-            (EngineDecision::HoldForNow, "Plan doesn't allow ride progression this week".to_string())
-        } else if overlap_blocked {
-            (EngineDecision::HoldForNow, format!("Another dimension progressed {} days ago (need 7)", days_since_any))
-        } else if !criteria.criteria_met {
-            let mut reasons = Vec::new();
-            if criteria.days_since_change < 7 {
-                reasons.push(format!("{} days since last change", criteria.days_since_change));
-            }
-            if !criteria.volume_stable { reasons.push("volume spike".to_string()); }
-            if !criteria.fatigue_low { reasons.push("fatigue high".to_string()); }
-            (EngineDecision::Hold, reasons.join(", "))
-        } else if !adherence.week_stable {
-            (EngineDecision::HoldForNow, "Week not stable (missed sessions or low adherence)".to_string())
-        } else {
-            (EngineDecision::ProgressAllowed, "All criteria met".to_string())
-        };
+    Ok(())
+}
 
-        DimensionStatus {
-            dimension: Dimension::Z2Ride,
-            current: format!("{}min", current),
-            target_for_week: format!("{}min", target),
-            assessment,
-            engine_decision,
-            reason,
-            next_value: Some(format!("{}min", next)),
-        }
+/// Log a progression change to history
+pub async fn log_progression(
+    pool: &SqlitePool,
+    dimension_name: &str,
+    previous_value: &str,
+    new_value: &str,
+    change_type: &str,
+    trigger_workout_id: Option<i64>,
+    context_json: Option<&str>,
+) -> Result<(), String> {
+    sqlx::query(
+        r#"
+        INSERT INTO progression_history
+            (dimension_name, previous_value, new_value, change_type, trigger_workout_id, context_snapshot_json)
+        VALUES (?, ?, ?, ?, ?, ?)
+        "#,
+    )
+    .bind(dimension_name)
+    .bind(previous_value)
+    .bind(new_value)
+    .bind(change_type)
+    .bind(trigger_workout_id)
+    .bind(context_json)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to log progression: {}", e))?;
+
+    Ok(())
+}
+
+/// ---------------------------------------------------------------------------
+/// Progression Actions
+/// ---------------------------------------------------------------------------
+
+/// Apply a progression to a dimension
+pub async fn apply_progression(
+    pool: &SqlitePool,
+    dimension_name: &str,
+    trigger_workout_id: Option<i64>,
+) -> Result<String, String> {
+    let mut dim = load_dimension(pool, dimension_name).await?;
+
+    let next_val = dim
+        .next_value()
+        .ok_or_else(|| format!("No next value available for {}", dimension_name))?;
+
+    let prev_val = dim.current_value.clone();
+    dim.current_value = next_val.clone();
+    dim.last_change_at = Some(Utc::now());
+
+    // Update status if we've reached ceiling
+    if dim.is_at_ceiling() {
+        dim.status = LifecycleStatus::AtCeiling;
+        dim.last_ceiling_touch_at = Some(Utc::now());
     }
 
-    fn compute_alignment(state: &ProgressionState, benchmark: &WeekBenchmark) -> PlanAlignment {
-        let mut behind_count = 0;
-        let mut ahead_count = 0;
+    save_dimension(pool, &dim).await?;
+    log_progression(
+        pool,
+        dimension_name,
+        &prev_val,
+        &next_val,
+        "progress",
+        trigger_workout_id,
+        None,
+    )
+    .await?;
 
-        // Run interval
-        if !Self::interval_gte(&state.run_interval_current, &benchmark.run_interval_target) {
-            behind_count += 1;
-        } else if Self::interval_gt(&state.run_interval_current, &benchmark.run_interval_target) {
-            ahead_count += 1;
-        }
+    Ok(next_val)
+}
 
-        // Long run
-        if state.long_run_current_min < benchmark.long_run_target_min {
-            behind_count += 1;
-        } else if state.long_run_current_min > benchmark.long_run_target_min {
-            ahead_count += 1;
-        }
+/// Record a ceiling touch (maintenance workout)
+pub async fn record_ceiling_touch(pool: &SqlitePool, dimension_name: &str) -> Result<(), String> {
+    let mut dim = load_dimension(pool, dimension_name).await?;
 
-        // Z2 ride
-        if state.z2_ride_current_min < benchmark.z2_ride_target_min {
-            behind_count += 1;
-        } else if state.z2_ride_current_min > benchmark.z2_ride_target_min {
-            ahead_count += 1;
-        }
-
-        if behind_count >= 2 {
-            PlanAlignment::Behind
-        } else if ahead_count >= 2 {
-            PlanAlignment::Ahead
-        } else {
-            PlanAlignment::OnTrack
-        }
+    if dim.status != LifecycleStatus::AtCeiling {
+        return Err(format!("{} is not at ceiling", dimension_name));
     }
 
-    // Interval progression: 4:1 -> 5:1 -> 6:1 -> 8:1 -> 10:1 -> continuous_20 -> continuous_25 -> ...
-    fn next_interval(current: &str) -> String {
-        match current {
-            "4:1" => "5:1".to_string(),
-            "5:1" => "6:1".to_string(),
-            "6:1" => "8:1".to_string(),
-            "8:1" => "10:1".to_string(),
-            "10:1" => "continuous_20".to_string(),
-            "continuous_20" => "continuous_25".to_string(),
-            "continuous_25" => "continuous_30".to_string(),
-            "continuous_30" => "continuous_35".to_string(),
-            "continuous_35" => "continuous_40".to_string(),
-            _ => "continuous_45".to_string(),
-        }
+    dim.last_ceiling_touch_at = Some(Utc::now());
+    save_dimension(pool, &dim).await?;
+
+    log_progression(
+        pool,
+        dimension_name,
+        &dim.current_value,
+        &dim.current_value,
+        "ceiling_touch",
+        None,
+        None,
+    )
+    .await?;
+
+    Ok(())
+}
+
+/// Apply regression to a dimension
+pub async fn apply_regression(pool: &SqlitePool, dimension_name: &str) -> Result<String, String> {
+    let mut dim = load_dimension(pool, dimension_name).await?;
+
+    let prev_val = dim
+        .prev_value()
+        .ok_or_else(|| format!("No previous value available for {}", dimension_name))?;
+
+    let old_val = dim.current_value.clone();
+    dim.current_value = prev_val.clone();
+    dim.last_change_at = Some(Utc::now());
+    dim.status = LifecycleStatus::Building; // Back to building
+
+    save_dimension(pool, &dim).await?;
+    log_progression(
+        pool,
+        dimension_name,
+        &old_val,
+        &prev_val,
+        "regress",
+        None,
+        None,
+    )
+    .await?;
+
+    Ok(prev_val)
+}
+
+/// Update ceiling for a dimension
+pub async fn update_ceiling(
+    pool: &SqlitePool,
+    dimension_name: &str,
+    new_ceiling: &str,
+) -> Result<(), String> {
+    let mut dim = load_dimension(pool, dimension_name).await?;
+
+    let old_ceiling = dim.ceiling_value.clone();
+    dim.ceiling_value = new_ceiling.to_string();
+
+    // Re-evaluate status
+    if dim.is_at_ceiling() {
+        dim.status = LifecycleStatus::AtCeiling;
+    } else {
+        dim.status = LifecycleStatus::Building;
     }
 
-    fn interval_to_rank(interval: &str) -> i32 {
-        match interval {
-            "4:1" => 1,
-            "5:1" => 2,
-            "6:1" => 3,
-            "8:1" => 4,
-            "10:1" => 5,
-            "continuous_20" => 6,
-            "continuous_25" => 7,
-            "continuous_30" => 8,
-            "continuous_35" => 9,
-            "continuous_40" => 10,
-            _ => 11,
-        }
-    }
+    save_dimension(pool, &dim).await?;
+    log_progression(
+        pool,
+        dimension_name,
+        &old_ceiling,
+        new_ceiling,
+        "ceiling_update",
+        None,
+        None,
+    )
+    .await?;
 
-    fn interval_gte(a: &str, b: &str) -> bool {
-        Self::interval_to_rank(a) >= Self::interval_to_rank(b)
-    }
-
-    fn interval_gt(a: &str, b: &str) -> bool {
-        Self::interval_to_rank(a) > Self::interval_to_rank(b)
-    }
+    Ok(())
 }
 
 /// ---------------------------------------------------------------------------
@@ -808,168 +919,166 @@ impl ProgressionSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::{IntensityDistribution, LongestSession, WeeklyVolume};
 
-    fn default_context() -> TrainingContext {
-        TrainingContext {
-            atl: Some(100.0),
-            ctl: Some(80.0),
-            tsb: Some(-5.0), // Moderate, not fatigued
-            weekly_volume: WeeklyVolume::default(),
-            week_over_week_delta_pct: Some(5.0),
-            intensity_distribution: IntensityDistribution::default(),
-            longest_session: LongestSession::default(),
-            consistency_pct: Some(85.0),
-            workouts_this_week: 4,
+    fn make_sequence_dimension(current: &str, ceiling: &str) -> ProgressionDimension {
+        ProgressionDimension {
+            id: 1,
+            name: "run_interval".to_string(),
+            current_value: current.to_string(),
+            ceiling_value: ceiling.to_string(),
+            step_config: StepConfig::Sequence {
+                sequence: vec![
+                    "4:1".to_string(),
+                    "5:1".to_string(),
+                    "6:1".to_string(),
+                    "8:1".to_string(),
+                    "10:1".to_string(),
+                    "continuous_20".to_string(),
+                    "continuous_30".to_string(),
+                    "continuous_45".to_string(),
+                ],
+            },
+            status: LifecycleStatus::Building,
+            last_change_at: Some(Utc::now() - Duration::days(10)),
+            last_ceiling_touch_at: None,
+            maintenance_cadence_days: 7,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
         }
     }
 
-    fn default_flags() -> TrainingFlags {
-        TrainingFlags::default()
+    fn make_increment_dimension(current: i32, ceiling: i32) -> ProgressionDimension {
+        ProgressionDimension {
+            id: 2,
+            name: "long_run".to_string(),
+            current_value: current.to_string(),
+            ceiling_value: ceiling.to_string(),
+            step_config: StepConfig::Increment {
+                increment: 5,
+                unit: "min".to_string(),
+            },
+            status: LifecycleStatus::Building,
+            last_change_at: Some(Utc::now() - Duration::days(10)),
+            last_ceiling_touch_at: None,
+            maintenance_cadence_days: 14,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
     }
 
-    fn stable_adherence() -> AdherenceSummary {
-        AdherenceSummary::default() // 100% adherence, all key sessions done
-    }
-
-    fn unstable_adherence() -> AdherenceSummary {
-        AdherenceSummary::compute(6, 3, 3, 2, 0) // 50% adherence, missed key session
+    fn make_regulated_dimension() -> ProgressionDimension {
+        ProgressionDimension {
+            id: 3,
+            name: "z2_ride".to_string(),
+            current_value: "45".to_string(),
+            ceiling_value: "60".to_string(),
+            step_config: StepConfig::Regulated {
+                options: vec![45, 60],
+                unit: "min".to_string(),
+            },
+            status: LifecycleStatus::AtCeiling,
+            last_change_at: None,
+            last_ceiling_touch_at: None,
+            maintenance_cadence_days: 10,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
     }
 
     #[test]
-    fn test_interval_progression_order() {
-        assert!(ProgressionSummary::interval_gte("5:1", "4:1"));
-        assert!(ProgressionSummary::interval_gte("continuous_20", "10:1"));
-        assert!(!ProgressionSummary::interval_gte("4:1", "5:1"));
+    fn test_sequence_progression() {
+        let dim = make_sequence_dimension("4:1", "continuous_45");
+        assert_eq!(dim.next_value(), Some("5:1".to_string()));
+        assert!(!dim.is_at_ceiling());
     }
 
     #[test]
-    fn test_criteria_met_allows_progression() {
-        let mut state = ProgressionState::default();
-        state.run_interval_last_change = Some(Utc::now() - Duration::days(10));
+    fn test_sequence_at_ceiling() {
+        let dim = make_sequence_dimension("continuous_45", "continuous_45");
+        assert!(dim.is_at_ceiling());
+        assert_eq!(dim.next_value(), None);
+    }
 
-        // Set target higher than current to allow progression
-        let benchmark = WeekBenchmark {
-            run_interval_target: "5:1".to_string(), // Current is 4:1, so not at target
-            ..WeekBenchmark::default()
+    #[test]
+    fn test_increment_progression() {
+        let dim = make_increment_dimension(30, 90);
+        assert_eq!(dim.next_value(), Some("35".to_string()));
+        assert!(!dim.is_at_ceiling());
+    }
+
+    #[test]
+    fn test_increment_at_ceiling() {
+        let dim = make_increment_dimension(90, 90);
+        assert!(dim.is_at_ceiling());
+        assert_eq!(dim.next_value(), None);
+    }
+
+    #[test]
+    fn test_regulated_no_progression() {
+        let dim = make_regulated_dimension();
+        assert_eq!(dim.dimension_type(), DimensionType::Regulated);
+        assert_eq!(dim.next_value(), None);
+    }
+
+    #[test]
+    fn test_regulated_tsb_duration() {
+        let dim = make_regulated_dimension();
+
+        // Fresh (TSB >= 0): longest duration
+        assert_eq!(dim.get_regulated_duration(Some(5.0)), Some(60));
+
+        // Moderate fatigue (TSB -10 to 0): shorter
+        assert_eq!(dim.get_regulated_duration(Some(-5.0)), Some(45));
+
+        // High fatigue (TSB < -10): recovery
+        assert_eq!(dim.get_regulated_duration(Some(-15.0)), Some(40));
+    }
+
+    #[test]
+    fn test_maintenance_due() {
+        let mut dim = make_sequence_dimension("continuous_45", "continuous_45");
+        dim.status = LifecycleStatus::AtCeiling;
+        dim.last_ceiling_touch_at = Some(Utc::now() - Duration::days(10));
+
+        // Maintenance cadence is 7 days, 10 days since touch = due
+        assert!(dim.maintenance_due());
+    }
+
+    #[test]
+    fn test_should_regress() {
+        let mut dim = make_sequence_dimension("continuous_45", "continuous_45");
+        dim.status = LifecycleStatus::AtCeiling;
+        dim.last_ceiling_touch_at = Some(Utc::now() - Duration::days(25));
+
+        // 25 days since touch > 21 day threshold
+        assert!(dim.should_regress());
+    }
+
+    #[test]
+    fn test_prev_value_sequence() {
+        let dim = make_sequence_dimension("6:1", "continuous_45");
+        assert_eq!(dim.prev_value(), Some("5:1".to_string()));
+    }
+
+    #[test]
+    fn test_prev_value_at_start() {
+        let dim = make_sequence_dimension("4:1", "continuous_45");
+        assert_eq!(dim.prev_value(), None);
+    }
+
+    #[test]
+    fn test_step_config_json_roundtrip() {
+        let config = StepConfig::Sequence {
+            sequence: vec!["4:1".to_string(), "5:1".to_string()],
         };
-        let context = default_context();
-        let flags = default_flags();
-        let adherence = stable_adherence();
+        let json = config.to_json();
+        let parsed = StepConfig::from_json(&json).unwrap();
 
-        let summary = ProgressionSummary::compute(&state, &benchmark, &context, &flags, adherence);
-
-        // Should be allowed since criteria met and no overlap
-        assert_eq!(summary.run_interval.engine_decision, EngineDecision::ProgressAllowed);
-    }
-
-    #[test]
-    fn test_overlap_rule_blocks_second_progression() {
-        let mut state = ProgressionState::default();
-        // Long run just progressed 3 days ago
-        state.long_run_last_change = Some(Utc::now() - Duration::days(3));
-        // Interval criteria would otherwise be met
-        state.run_interval_last_change = Some(Utc::now() - Duration::days(10));
-
-        let benchmark = WeekBenchmark {
-            run_interval_target: "5:1".to_string(), // Target higher than current
-            allow_long_run_progression: true,
-            ..WeekBenchmark::default()
-        };
-        let context = default_context();
-        let flags = default_flags();
-        let adherence = stable_adherence();
-
-        let summary = ProgressionSummary::compute(&state, &benchmark, &context, &flags, adherence);
-
-        // Interval should be blocked by overlap rule
-        assert_eq!(summary.run_interval.engine_decision, EngineDecision::HoldForNow);
-        assert!(summary.run_interval.reason.contains("days ago"));
-    }
-
-    #[test]
-    fn test_plan_gate_blocks_progression() {
-        let mut state = ProgressionState::default();
-        state.long_run_last_change = Some(Utc::now() - Duration::days(10));
-
-        // Set long run target higher, but don't allow progression
-        let benchmark = WeekBenchmark {
-            long_run_target_min: 45, // Current is 30, so not at target
-            allow_long_run_progression: false,
-            ..WeekBenchmark::default()
-        };
-        let context = default_context();
-        let flags = default_flags();
-        let adherence = stable_adherence();
-
-        let summary = ProgressionSummary::compute(&state, &benchmark, &context, &flags, adherence);
-
-        assert_eq!(summary.long_run.engine_decision, EngineDecision::HoldForNow);
-        assert!(summary.long_run.reason.contains("Plan doesn't allow"));
-    }
-
-    #[test]
-    fn test_unstable_week_blocks_progression() {
-        let mut state = ProgressionState::default();
-        state.run_interval_last_change = Some(Utc::now() - Duration::days(10));
-
-        // Set target higher than current
-        let benchmark = WeekBenchmark {
-            run_interval_target: "5:1".to_string(),
-            ..WeekBenchmark::default()
-        };
-        let context = default_context();
-        let flags = default_flags();
-        let adherence = unstable_adherence(); // 50% adherence
-
-        let summary = ProgressionSummary::compute(&state, &benchmark, &context, &flags, adherence);
-
-        // Should be blocked due to unstable week
-        assert_eq!(summary.run_interval.engine_decision, EngineDecision::HoldDueToUnstableWeek);
-        assert!(summary.run_interval.reason.contains("adherence"));
-    }
-
-    #[test]
-    fn test_missed_key_session_blocks_long_run() {
-        let mut state = ProgressionState::default();
-        state.long_run_last_change = Some(Utc::now() - Duration::days(10));
-
-        let benchmark = WeekBenchmark {
-            long_run_target_min: 45, // Current is 30, so not at target
-            allow_long_run_progression: true,
-            ..WeekBenchmark::default()
-        };
-        let context = default_context();
-        let flags = default_flags();
-        // 83% adherence but missed key session (key_completed < key_expected)
-        let adherence = AdherenceSummary::compute(6, 5, 3, 2, 0);
-
-        let summary = ProgressionSummary::compute(&state, &benchmark, &context, &flags, adherence);
-
-        // Long run should be blocked due to missed key session
-        assert_eq!(summary.long_run.engine_decision, EngineDecision::HoldDueToMissedKeySession);
-    }
-
-    #[test]
-    fn test_consecutive_low_weeks_triggers_regression() {
-        let mut state = ProgressionState::default();
-        state.run_interval_current = "5:1".to_string();
-        state.run_interval_last_change = Some(Utc::now() - Duration::days(10));
-
-        // Set target to match current (at target), but regression overrides
-        let benchmark = WeekBenchmark {
-            run_interval_target: "5:1".to_string(),
-            ..WeekBenchmark::default()
-        };
-        let context = default_context();
-        let flags = default_flags();
-        // 2 consecutive low-adherence weeks
-        let adherence = AdherenceSummary::compute(6, 3, 3, 1, 2);
-
-        let summary = ProgressionSummary::compute(&state, &benchmark, &context, &flags, adherence);
-
-        // Should recommend regression
-        assert_eq!(summary.run_interval.engine_decision, EngineDecision::Regress);
-        assert!(summary.run_interval.reason.contains("low-adherence weeks"));
+        match parsed {
+            StepConfig::Sequence { sequence } => {
+                assert_eq!(sequence, vec!["4:1", "5:1"]);
+            }
+            _ => panic!("Wrong type"),
+        }
     }
 }
