@@ -367,6 +367,72 @@ Run once per week, looking at 7-28 day trends:
 - Sync only happens while app is running
 - If this becomes painful, add launchd later
 
+## Progression Engine
+
+The progression engine is the authoritative source for training decisions. The LLM interprets and explains these decisions but never overrides them.
+
+### Design Principles
+
+1. **Rust as source of truth** - All progression logic lives in deterministic Rust code
+2. **LLM as narrator only** - Claude explains decisions, never makes them
+3. **Multi-dimensional tracking** - Separate progression for run intervals, long runs, and Z2 rides
+4. **No-overlap rule** - Only one dimension can progress within 7 days
+5. **Plan gates** - Each week specifies what's allowed to progress
+
+### Training Phases (12-week Kilimanjaro Prep)
+
+| Phase | Weeks | Focus |
+|-------|-------|-------|
+| Foundation | 1-4 | Build aerobic base, establish habits |
+| Expansion | 5-8 | Extend durations, progress intervals |
+| Consolidation | 9-12 | Add quality, maintain volume |
+
+### Progression Dimensions
+
+```sql
+-- progression_state tracks current level in each dimension
+run_interval_current TEXT    -- '4:1', '5:1', ..., 'continuous_30'
+long_run_current_min INTEGER -- 30, 35, 40, ...
+z2_ride_current_min INTEGER  -- 45, 50, 55, ...
+```
+
+### Engine Decisions
+
+The engine outputs one of these decisions per dimension:
+
+| Decision | Meaning |
+|----------|---------|
+| `progress_allowed` | All criteria met, recommend the progression |
+| `hold_for_now` | Criteria met but blocked (plan gate or overlap rule) |
+| `hold_due_to_unstable_week` | Week had <70% adherence |
+| `hold_due_to_missed_key_session` | Key session missed (e.g., long run) |
+| `hold` | Criteria not met |
+| `regress` | Step back (consecutive low-adherence weeks) |
+
+### Adherence Tracking
+
+Missing a workout is a load signal, not a moral failure. The engine handles this deterministically:
+
+```rust
+struct AdherenceSummary {
+    total_expected: u8,      // Expected workouts this week
+    total_completed: u8,     // Completed workouts
+    key_expected: u8,        // Key sessions (e.g., long run, intervals)
+    key_completed: u8,       // Key sessions completed
+    adherence_pct: f32,      // Completion percentage
+    week_stable: bool,       // >= 75% adherence AND all key sessions done
+    consecutive_low_weeks: u8 // For regression detection
+}
+```
+
+**Adherence Rules:**
+1. **Single missed non-key workout:** Progression may still be allowed if `week_stable`
+2. **Missed key session:** Hard block on that dimension's progression
+3. **<70% adherence:** Unstable week, all dimensions blocked
+4. **2+ consecutive low weeks:** Consider regression
+
+**No compensatory volume.** No "make-up" sessions. No guilt.
+
 ## MVP Scope
 
 ### v0.1 - Core Loop
@@ -374,18 +440,28 @@ Run once per week, looking at 7-28 day trends:
 - [x] SQLite database setup
 - [x] Strava OAuth flow
 - [x] Fetch and store workouts
-- [ ] Deterministic analysis layer (Tier 1 metrics)
-- [ ] Basic LLM analysis (one workout)
+- [x] Deterministic analysis layer (Tier 1 metrics)
+- [x] Tier 2 rolling metrics (ATL, CTL, TSB)
+- [x] Basic LLM analysis (one workout)
 - [ ] Simple menubar dropdown showing latest analysis
 
-### v0.2 - Full Daily Flow
+### v0.2 - Progression Engine
+- [x] 12-week structured plan schema
+- [x] Multi-dimensional progression tracking
+- [x] Adherence tracking with deterministic rules
+- [x] Engine decisions (progress/hold/regress)
+- [x] Updated coach prompt for engine interpretation
+- [ ] Wire progression engine to workout logging
+- [ ] Frontend display of progression status
+
+### v0.3 - Full Daily Flow
 - [ ] Oura integration
 - [ ] Automatic sync on timer
 - [ ] Pre-aggregated context for LLM
 - [ ] Tomorrow recommendation based on recovery
 - [ ] Status icon color based on readiness
 
-### v0.3 - Polish
+### v0.4 - Polish
 - [ ] Weekly summary generation
 - [ ] Charts in detail view
 - [ ] Historical workout browser
