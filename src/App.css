@@ -421,6 +421,78 @@ button.small {
   color: #666;
 }
 
+/* Coach Analysis */
+.analysis-content {
+  text-align: left;
+}
+
+.analysis-summary {
+  margin-bottom: 16px;
+}
+
+.analysis-summary p {
+  margin: 0;
+  font-size: 1em;
+  line-height: 1.5;
+}
+
+.analysis-recommendation {
+  margin-bottom: 16px;
+  padding: 12px;
+  background: #e8f5e9;
+  border-radius: 8px;
+}
+
+.analysis-recommendation strong {
+  color: #2e7d32;
+  display: block;
+  margin-bottom: 4px;
+}
+
+.analysis-recommendation p {
+  margin: 0;
+  font-size: 0.95em;
+}
+
+.analysis-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.flag-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  background: #fff3e0;
+  color: #e65100;
+  border-radius: 12px;
+  font-size: 0.8em;
+  font-weight: 500;
+}
+
+.analysis-goals {
+  padding: 12px;
+  background: #e3f2fd;
+  border-radius: 8px;
+}
+
+.analysis-goals strong {
+  color: #1565c0;
+  display: block;
+  margin-bottom: 4px;
+}
+
+.analysis-goals p {
+  margin: 0;
+  font-size: 0.95em;
+}
+
+.analysis-empty {
+  text-align: center;
+  padding: 20px;
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     color: #f6f6f6;
@@ -484,5 +556,26 @@ button.small {
   .volume-legend,
   .context-stats {
     color: #aaa;
+  }
+
+  .analysis-recommendation {
+    background: #1e3620;
+  }
+
+  .analysis-recommendation strong {
+    color: #81c784;
+  }
+
+  .flag-badge {
+    background: #3d2e20;
+    color: #ffb74d;
+  }
+
+  .analysis-goals {
+    background: #1a2a3a;
+  }
+
+  .analysis-goals strong {
+    color: #64b5f6;
   }
 }

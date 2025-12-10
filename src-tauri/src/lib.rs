@@ -1,5 +1,6 @@
 mod analysis;
 mod db;
+mod llm;
 mod models;
 mod commands;
 mod strava;
@@ -46,6 +47,9 @@ pub fn run() {
       commands::analysis::compute_workout_metrics,
       commands::analysis::get_workouts_with_metrics,
       commands::analysis::get_training_context,
+      commands::analysis::analyze_workout,
+      commands::analysis::get_workout_analysis,
+      commands::analysis::get_latest_analysis,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

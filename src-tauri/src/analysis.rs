@@ -448,6 +448,234 @@ impl TrainingContext {
 }
 
 /// ---------------------------------------------------------------------------
+/// Tier 3: Training Flags (Boolean Alerts)
+/// ---------------------------------------------------------------------------
+
+/// Training flags that indicate potential issues or achievements
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TrainingFlags {
+  /// Volume > 1.2x chronic average
+  pub volume_spike: bool,
+
+  /// Volume < 0.7x chronic average
+  pub volume_drop: bool,
+
+  /// TSB < -20 (accumulated fatigue)
+  pub high_fatigue: bool,
+
+  /// TSB between +5 and +15 (good racing form)
+  pub peak_form: bool,
+
+  /// No run > 10km in 3 weeks
+  pub long_run_gap: bool,
+
+  /// No ride > 60min in 3 weeks
+  pub long_ride_gap: bool,
+
+  /// Intensity predominantly Z3+ (> 40%)
+  pub intensity_heavy: bool,
+
+  /// Predominantly Z1-Z2 (> 80%) - good aerobic base
+  pub polarized_training: bool,
+}
+
+impl TrainingFlags {
+  /// Compute training flags from workout history and context
+  pub fn compute(
+    workouts: &[WorkoutSummary],
+    context: &TrainingContext,
+    _settings: &UserSettings,
+  ) -> Self {
+    let now = chrono::Utc::now();
+    let mut flags = TrainingFlags::default();
+
+    // Volume spike: current week > 1.2x chronic (use CTL as proxy for chronic load)
+    // We approximate chronic volume from CTL and compare to current week
+    if let (Some(atl), Some(ctl)) = (context.atl, context.ctl) {
+      // If weekly load (ATL) is much higher than chronic daily average * 7
+      let chronic_weekly = ctl * 7.0;
+      if atl > chronic_weekly * 1.2 {
+        flags.volume_spike = true;
+      }
+      if atl < chronic_weekly * 0.7 && chronic_weekly > 50.0 {
+        // Only flag if there's meaningful chronic load
+        flags.volume_drop = true;
+      }
+    }
+
+    // High fatigue: TSB < -20
+    if let Some(tsb) = context.tsb {
+      if tsb < -20.0 {
+        flags.high_fatigue = true;
+      }
+      if tsb > 5.0 && tsb < 15.0 {
+        flags.peak_form = true;
+      }
+    }
+
+    // Long run gap: no run > 10km in 21 days
+    let days_21: Vec<_> = workouts
+      .iter()
+      .filter(|w| (now - w.started_at).num_days() < 21)
+      .collect();
+
+    // We need distance data - check if any run has duration > ~60min (proxy for 10km at 6min/km)
+    let has_long_run = days_21.iter().any(|w| {
+      w.activity_type.to_lowercase() == "run"
+        && w.duration_seconds.map_or(false, |d| d > 3600) // > 60 min
+    });
+    if !has_long_run && days_21.iter().any(|w| w.activity_type.to_lowercase() == "run") {
+      flags.long_run_gap = true;
+    }
+
+    // Long ride gap: no ride > 60min in 21 days
+    let has_long_ride = days_21.iter().any(|w| {
+      w.activity_type.to_lowercase() == "ride"
+        && w.duration_seconds.map_or(false, |d| d > 3600) // > 60 min
+    });
+    if !has_long_ride && days_21.iter().any(|w| w.activity_type.to_lowercase() == "ride") {
+      flags.long_ride_gap = true;
+    }
+
+    // Intensity flags from distribution
+    let high_intensity_pct =
+      context.intensity_distribution.z3_pct
+        + context.intensity_distribution.z4_pct
+        + context.intensity_distribution.z5_pct;
+    let low_intensity_pct = context.intensity_distribution.z1_pct + context.intensity_distribution.z2_pct;
+
+    if high_intensity_pct > 40.0 {
+      flags.intensity_heavy = true;
+    }
+    if low_intensity_pct > 80.0 {
+      flags.polarized_training = true;
+    }
+
+    flags
+  }
+
+  /// Convert flags to a list of string descriptions for the LLM
+  pub fn to_string_list(&self) -> Vec<String> {
+    let mut flags = Vec::new();
+
+    if self.volume_spike {
+      flags.push("volume_spike: Training volume significantly above chronic average".to_string());
+    }
+    if self.volume_drop {
+      flags.push("volume_drop: Training volume significantly below chronic average".to_string());
+    }
+    if self.high_fatigue {
+      flags.push("high_fatigue: TSB indicates accumulated fatigue (< -20)".to_string());
+    }
+    if self.peak_form {
+      flags.push("peak_form: TSB indicates good racing form (+5 to +15)".to_string());
+    }
+    if self.long_run_gap {
+      flags.push("long_run_gap: No long run (>60min) in 3 weeks".to_string());
+    }
+    if self.long_ride_gap {
+      flags.push("long_ride_gap: No long ride (>60min) in 3 weeks".to_string());
+    }
+    if self.intensity_heavy {
+      flags.push("intensity_heavy: >40% of training in Z3+ (consider more easy volume)".to_string());
+    }
+    if self.polarized_training {
+      flags.push("polarized_training: Good - >80% in Z1-Z2 aerobic zones".to_string());
+    }
+
+    flags
+  }
+}
+
+/// ---------------------------------------------------------------------------
+/// Context Package for LLM
+/// ---------------------------------------------------------------------------
+
+/// The complete context package sent to Claude for analysis
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextPackage {
+  /// The specific workout being analyzed
+  pub workout: WorkoutContext,
+
+  /// Rolling training context
+  pub context: TrainingContext,
+
+  /// Active training flags
+  pub flags: Vec<String>,
+
+  /// User settings relevant to analysis
+  pub user: UserContext,
+}
+
+/// Workout-specific context for the LLM
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkoutContext {
+  pub activity_type: String,
+  pub duration_min: Option<f64>,
+  pub distance_km: Option<f64>,
+  pub pace_min_km: Option<f64>,
+  pub avg_hr: Option<i64>,
+  pub avg_watts: Option<f64>,
+  pub rtss: Option<f64>,
+  pub zone: Option<String>,
+  pub date: String,
+}
+
+/// User context for the LLM
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserContext {
+  pub max_hr: Option<i64>,
+  pub lthr: Option<i64>,
+  pub training_days_per_week: i64,
+}
+
+impl ContextPackage {
+  /// Build a context package from workout data and computed metrics
+  pub fn build(
+    workout_type: &str,
+    started_at: &chrono::DateTime<chrono::Utc>,
+    duration_seconds: Option<i64>,
+    distance_meters: Option<f64>,
+    average_hr: Option<i64>,
+    average_watts: Option<f64>,
+    metrics: &WorkoutMetrics,
+    training_context: TrainingContext,
+    flags: TrainingFlags,
+    settings: &UserSettings,
+  ) -> Self {
+    let workout = WorkoutContext {
+      activity_type: workout_type.to_string(),
+      duration_min: duration_seconds.map(|s| s as f64 / 60.0),
+      distance_km: distance_meters.map(|m| m / 1000.0),
+      pace_min_km: metrics.pace_min_per_km,
+      avg_hr: average_hr,
+      avg_watts: average_watts,
+      rtss: metrics.rtss,
+      zone: metrics.hr_zone.map(|z| z.as_str().to_string()),
+      date: started_at.format("%Y-%m-%d").to_string(),
+    };
+
+    let user = UserContext {
+      max_hr: settings.max_hr,
+      lthr: settings.effective_lthr(),
+      training_days_per_week: settings.training_days_per_week,
+    };
+
+    Self {
+      workout,
+      context: training_context,
+      flags: flags.to_string_list(),
+      user,
+    }
+  }
+
+  /// Serialize to JSON for the LLM prompt
+  pub fn to_json(&self) -> String {
+    serde_json::to_string_pretty(self).unwrap_or_default()
+  }
+}
+
+/// ---------------------------------------------------------------------------
 /// Tests
 /// ---------------------------------------------------------------------------
 

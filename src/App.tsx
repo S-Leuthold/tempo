@@ -78,6 +78,23 @@ interface TrainingContext {
   workouts_this_week: number;
 }
 
+interface WorkoutAnalysis {
+  id: number | null;
+  workout_id: number;
+  summary: string;
+  tomorrow_recommendation: string;
+  risk_flags: string[];
+  goal_notes: string | null;
+  created_at: string | null;
+}
+
+interface AnalysisResult {
+  workout_id: number;
+  analysis: WorkoutAnalysis;
+  input_tokens: number;
+  output_tokens: number;
+}
+
 function App() {
   const [stravaStatus, setStravaStatus] = useState<StravaAuthStatus | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -88,6 +105,8 @@ function App() {
   const [workouts, setWorkouts] = useState<WorkoutWithMetrics[]>([]);
   const [settings, setSettings] = useState<UserSettings | null>(null);
   const [trainingContext, setTrainingContext] = useState<TrainingContext | null>(null);
+  const [latestAnalysis, setLatestAnalysis] = useState<WorkoutAnalysis | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
 
@@ -100,6 +119,7 @@ function App() {
     loadWorkouts();
     loadSettings();
     loadTrainingContext();
+    loadLatestAnalysis();
   }, []);
 
   async function checkStravaStatus() {
@@ -138,6 +158,34 @@ function App() {
       setTrainingContext(data);
     } catch (e) {
       console.error("Failed to load training context:", e);
+    }
+  }
+
+  async function loadLatestAnalysis() {
+    try {
+      const data = await invoke<WorkoutAnalysis | null>("get_latest_analysis");
+      setLatestAnalysis(data);
+    } catch (e) {
+      console.error("Failed to load latest analysis:", e);
+    }
+  }
+
+  async function analyzeLatestWorkout() {
+    if (workouts.length === 0) return;
+
+    setIsAnalyzing(true);
+    setError(null);
+
+    try {
+      const result = await invoke<AnalysisResult>("analyze_workout", {
+        workoutId: workouts[0].id,
+      });
+      setLatestAnalysis(result.analysis);
+    } catch (e: unknown) {
+      const errorObj = e as { message?: string };
+      setError(`Analysis failed: ${errorObj.message || e}`);
+    } finally {
+      setIsAnalyzing(false);
     }
   }
 
@@ -384,6 +432,56 @@ function App() {
               <span>Consistency: {trainingContext.consistency_pct.toFixed(0)}%</span>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Coach Analysis Card */}
+      {workouts.length > 0 && hasSettings && (
+        <div className="card">
+          <div className="card-header">
+            <h2>Coach Analysis</h2>
+            <button
+              className="small"
+              onClick={analyzeLatestWorkout}
+              disabled={isAnalyzing}
+            >
+              {isAnalyzing ? "Analyzing..." : latestAnalysis ? "Re-analyze" : "Analyze"}
+            </button>
+          </div>
+
+          {latestAnalysis ? (
+            <div className="analysis-content">
+              <div className="analysis-summary">
+                <p>{latestAnalysis.summary}</p>
+              </div>
+
+              <div className="analysis-recommendation">
+                <strong>Tomorrow:</strong>
+                <p>{latestAnalysis.tomorrow_recommendation}</p>
+              </div>
+
+              {latestAnalysis.risk_flags.length > 0 && (
+                <div className="analysis-flags">
+                  {latestAnalysis.risk_flags.map((flag, i) => (
+                    <span key={i} className="flag-badge">{flag}</span>
+                  ))}
+                </div>
+              )}
+
+              {latestAnalysis.goal_notes && (
+                <div className="analysis-goals">
+                  <strong>Goal Progress:</strong>
+                  <p>{latestAnalysis.goal_notes}</p>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="analysis-empty">
+              <p className="info">
+                Click "Analyze" to get AI-powered coaching feedback on your latest workout.
+              </p>
+            </div>
+          )}
         </div>
       )}
 
