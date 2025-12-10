@@ -357,6 +357,224 @@ pub struct StravaActivity {
   pub suffer_score: Option<f64>,
 }
 
+/// ---------------------------------------------------------------------------
+/// Strava API - Activity Streams (time series data)
+/// ---------------------------------------------------------------------------
+
+/// Raw stream data from Strava API (array format)
+#[derive(Debug, Clone, Deserialize)]
+pub struct StravaStream {
+  #[serde(rename = "type")]
+  pub stream_type: String,
+  pub data: Vec<serde_json::Value>,
+  pub series_type: Option<String>,
+  pub original_size: Option<i64>,
+  pub resolution: Option<String>,
+}
+
+/// Alternative stream format when key_by_type=true (object format)
+#[derive(Debug, Clone, Deserialize)]
+pub struct StravaStreamKeyed {
+  pub data: Vec<serde_json::Value>,
+  pub series_type: Option<String>,
+  pub original_size: Option<i64>,
+  pub resolution: Option<String>,
+}
+
+/// Downsampled workout samples for charts
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkoutSamples {
+  #[serde(skip_serializing_if = "Vec::is_empty", default)]
+  pub hr: Vec<i64>,
+  #[serde(skip_serializing_if = "Vec::is_empty", default)]
+  pub watts: Vec<i64>,
+  #[serde(skip_serializing_if = "Vec::is_empty", default)]
+  pub pace: Vec<f64>,  // min/km
+}
+
+impl WorkoutSamples {
+  pub fn is_empty(&self) -> bool {
+    self.hr.is_empty() && self.watts.is_empty() && self.pace.is_empty()
+  }
+
+  pub fn to_json(&self) -> String {
+    serde_json::to_string(self).unwrap_or_default()
+  }
+}
+
+/// Fetch activity streams (heartrate, watts, velocity) from Strava
+pub async fn fetch_activity_streams(
+  access_token: &str,
+  activity_id: i64,
+) -> Result<Vec<StravaStream>, StravaError> {
+  let client = Client::new();
+
+  // Request time, heartrate, watts, and velocity_smooth streams
+  // Use key_by_type=true for more predictable object format
+  let url = format!(
+    "{}/activities/{}/streams?keys=time,heartrate,watts,velocity_smooth&key_by_type=true",
+    STRAVA_API_BASE, activity_id
+  );
+
+  let response = client
+    .get(&url)
+    .header("Authorization", format!("Bearer {}", access_token))
+    .send()
+    .await?;
+
+  if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+    return Err(StravaError::NotAuthenticated);
+  }
+
+  // 404 means no streams available for this activity (manual entry, etc.)
+  if response.status() == reqwest::StatusCode::NOT_FOUND {
+    return Ok(vec![]);
+  }
+
+  if !response.status().is_success() {
+    let error_text = response.text().await.unwrap_or_default();
+    return Err(StravaError::OAuth(format!(
+      "Failed to fetch streams: {}",
+      error_text
+    )));
+  }
+
+  let response_text = response.text().await?;
+
+  // Strava returns object format with key_by_type=true:
+  // {"time": {"data": [...]}, "heartrate": {"data": [...]}, ...}
+  let keyed: std::collections::HashMap<String, StravaStreamKeyed> =
+    serde_json::from_str(&response_text).map_err(|e| {
+      eprintln!("Failed to parse streams response: {}", e);
+      eprintln!(
+        "Raw response (first 500 chars): {}",
+        &response_text[..response_text.len().min(500)]
+      );
+      StravaError::OAuth(format!("Failed to parse streams: {}", e))
+    })?;
+
+  // Convert keyed format to array format for compatibility with downsample_streams
+  let streams: Vec<StravaStream> = keyed
+    .into_iter()
+    .map(|(key, value)| StravaStream {
+      stream_type: key,
+      data: value.data,
+      series_type: value.series_type,
+      original_size: value.original_size,
+      resolution: value.resolution,
+    })
+    .collect();
+
+  Ok(streams)
+}
+
+/// Downsample streams to 10-second intervals
+pub fn downsample_streams(streams: &[StravaStream], interval_seconds: i64) -> WorkoutSamples {
+  // Find each stream type
+  let time_data: Vec<i64> = streams
+    .iter()
+    .find(|s| s.stream_type == "time")
+    .map(|s| {
+      s.data
+        .iter()
+        .filter_map(|v| v.as_i64())
+        .collect()
+    })
+    .unwrap_or_default();
+
+  let hr_data: Vec<i64> = streams
+    .iter()
+    .find(|s| s.stream_type == "heartrate")
+    .map(|s| {
+      s.data
+        .iter()
+        .filter_map(|v| v.as_i64())
+        .collect()
+    })
+    .unwrap_or_default();
+
+  let watts_data: Vec<i64> = streams
+    .iter()
+    .find(|s| s.stream_type == "watts")
+    .map(|s| {
+      s.data
+        .iter()
+        .filter_map(|v| v.as_i64())
+        .collect()
+    })
+    .unwrap_or_default();
+
+  // velocity_smooth is in m/s, we need min/km
+  let velocity_data: Vec<f64> = streams
+    .iter()
+    .find(|s| s.stream_type == "velocity_smooth")
+    .map(|s| {
+      s.data
+        .iter()
+        .filter_map(|v| v.as_f64())
+        .collect()
+    })
+    .unwrap_or_default();
+
+  if time_data.is_empty() {
+    return WorkoutSamples {
+      hr: vec![],
+      watts: vec![],
+      pace: vec![],
+    };
+  }
+
+  // Downsample by taking average of each interval bucket
+  let mut samples = WorkoutSamples {
+    hr: vec![],
+    watts: vec![],
+    pace: vec![],
+  };
+
+  let max_time = *time_data.last().unwrap_or(&0);
+  let mut bucket_start = 0i64;
+
+  while bucket_start <= max_time {
+    let bucket_end = bucket_start + interval_seconds;
+
+    // Find indices in this bucket
+    let indices: Vec<usize> = time_data
+      .iter()
+      .enumerate()
+      .filter(|(_, &t)| t >= bucket_start && t < bucket_end)
+      .map(|(i, _)| i)
+      .collect();
+
+    if !indices.is_empty() {
+      // Average HR for bucket
+      if !hr_data.is_empty() {
+        let sum: i64 = indices.iter().filter_map(|&i| hr_data.get(i)).sum();
+        samples.hr.push(sum / indices.len() as i64);
+      }
+
+      // Average watts for bucket
+      if !watts_data.is_empty() {
+        let sum: i64 = indices.iter().filter_map(|&i| watts_data.get(i)).sum();
+        samples.watts.push(sum / indices.len() as i64);
+      }
+
+      // Average pace for bucket (convert m/s to min/km)
+      if !velocity_data.is_empty() {
+        let sum: f64 = indices.iter().filter_map(|&i| velocity_data.get(i)).sum();
+        let avg_mps = sum / indices.len() as f64;
+        if avg_mps > 0.0 {
+          let min_per_km = (1000.0 / avg_mps) / 60.0;
+          samples.pace.push((min_per_km * 100.0).round() / 100.0); // 2 decimal places
+        }
+      }
+    }
+
+    bucket_start = bucket_end;
+  }
+
+  samples
+}
+
 /// Fetch recent activities from Strava
 pub async fn fetch_activities(
   access_token: &str,

@@ -1,7 +1,8 @@
 use crate::db::AppState;
 use crate::strava::{
-  build_auth_url, exchange_code_for_tokens, fetch_activities, refresh_tokens, wait_for_callback,
-  StravaActivity, StravaConfig, StravaError, StravaTokens,
+  build_auth_url, downsample_streams, exchange_code_for_tokens, fetch_activities,
+  fetch_activity_streams, refresh_tokens, wait_for_callback, StravaActivity, StravaConfig,
+  StravaError, StravaTokens,
 };
 use chrono::Utc;
 use serde::Serialize;
@@ -207,10 +208,33 @@ pub async fn strava_sync_activities(
 
   // Store each activity in the database
   let mut new_count = 0;
-  for activity in activities {
-    let inserted = save_activity(&state.db, &activity).await?;
+  for activity in &activities {
+    let inserted = save_activity(&state.db, activity).await?;
     if inserted {
       new_count += 1;
+
+      // Fetch and store streams for new activities (10-second intervals)
+      println!("Fetching streams for activity {}", activity.id);
+      match fetch_activity_streams(&access_token, activity.id).await {
+        Ok(streams) => {
+          if !streams.is_empty() {
+            let samples = downsample_streams(&streams, 10);
+            if !samples.is_empty() {
+              save_activity_samples(&state.db, activity.id, &samples).await?;
+              println!(
+                "  Stored {} HR samples, {} watts samples, {} pace samples",
+                samples.hr.len(),
+                samples.watts.len(),
+                samples.pace.len()
+              );
+            }
+          }
+        }
+        Err(e) => {
+          // Don't fail the whole sync if streams fail for one activity
+          eprintln!("Warning: Failed to fetch streams for activity {}: {}", activity.id, e);
+        }
+      }
     }
   }
 
@@ -269,6 +293,31 @@ async fn update_sync_time(db: &crate::db::DbPool) -> Result<(), StravaError> {
   sqlx::query(
     "UPDATE sync_state SET last_sync_at = CURRENT_TIMESTAMP WHERE source = 'strava'",
   )
+  .execute(db)
+  .await
+  .map_err(|e| StravaError::Database(e.to_string()))?;
+
+  Ok(())
+}
+
+/// Save downsampled stream data for an activity
+async fn save_activity_samples(
+  db: &crate::db::DbPool,
+  strava_id: i64,
+  samples: &crate::strava::WorkoutSamples,
+) -> Result<(), StravaError> {
+  let samples_json = samples.to_json();
+
+  sqlx::query(
+    r#"
+    UPDATE workouts
+    SET samples_json = ?1, samples_fetched_at = ?2
+    WHERE strava_id = ?3
+    "#,
+  )
+  .bind(&samples_json)
+  .bind(Utc::now())
+  .bind(strava_id.to_string())
   .execute(db)
   .await
   .map_err(|e| StravaError::Database(e.to_string()))?;
