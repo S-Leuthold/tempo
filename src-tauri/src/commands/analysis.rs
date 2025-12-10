@@ -1,6 +1,9 @@
-use crate::analysis::{HrZone, UserSettings, WorkoutMetrics};
+use crate::analysis::{
+  HrZone, IntensityDistribution, LongestSession, TrainingContext, UserSettings, WeeklyVolume,
+  WorkoutMetrics, WorkoutSummary,
+};
 use crate::db::AppState;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::sync::Arc;
 use tauri::State;
@@ -229,4 +232,65 @@ pub async fn get_workouts_with_metrics(
     .collect();
 
   Ok(workouts)
+}
+
+/// ---------------------------------------------------------------------------
+/// Get Training Context (Tier 2 Rolling Metrics)
+/// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn get_training_context(
+  state: State<'_, Arc<AppState>>,
+) -> Result<TrainingContext, String> {
+  // Get user settings
+  let settings = get_user_settings(state.clone()).await?;
+
+  // Fetch workouts from last 42 days (needed for CTL calculation)
+  let rows: Vec<(String, String, Option<i64>, Option<f64>, Option<String>)> = sqlx::query_as(
+    r#"
+    SELECT
+      started_at,
+      activity_type,
+      duration_seconds,
+      CAST(rtss AS REAL),
+      hr_zone
+    FROM workouts
+    WHERE started_at >= datetime('now', '-42 days')
+    ORDER BY started_at DESC
+    "#,
+  )
+  .fetch_all(&state.db)
+  .await
+  .map_err(|e| format!("Failed to fetch workouts for context: {}", e))?;
+
+  // Convert to WorkoutSummary
+  let workouts: Vec<WorkoutSummary> = rows
+    .into_iter()
+    .filter_map(|(started_at, activity_type, duration_seconds, rtss, hr_zone)| {
+      // Parse the started_at timestamp
+      let dt = DateTime::parse_from_rfc3339(&started_at)
+        .or_else(|_| DateTime::parse_from_str(&started_at, "%Y-%m-%dT%H:%M:%SZ"))
+        .or_else(|_| DateTime::parse_from_str(&format!("{}+00:00", started_at), "%Y-%m-%d %H:%M:%S%:z"))
+        .ok()?;
+
+      let hr_zone_enum = hr_zone.as_ref().and_then(|z| match z.as_str() {
+        "Z1" => Some(HrZone::Z1),
+        "Z2" => Some(HrZone::Z2),
+        "Z3" => Some(HrZone::Z3),
+        "Z4" => Some(HrZone::Z4),
+        "Z5" => Some(HrZone::Z5),
+        _ => None,
+      });
+
+      Some(WorkoutSummary {
+        started_at: dt.with_timezone(&Utc),
+        activity_type,
+        duration_seconds,
+        rtss,
+        hr_zone: hr_zone_enum,
+      })
+    })
+    .collect();
+
+  Ok(TrainingContext::compute(&workouts, &settings))
 }

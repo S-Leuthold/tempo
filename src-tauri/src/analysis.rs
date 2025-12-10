@@ -191,6 +191,263 @@ impl WorkoutMetrics {
 }
 
 /// ---------------------------------------------------------------------------
+/// Tier 2: Rolling Context Metrics
+/// ---------------------------------------------------------------------------
+
+/// A workout summary used for rolling calculations
+#[derive(Debug, Clone)]
+pub struct WorkoutSummary {
+  pub started_at: chrono::DateTime<chrono::Utc>,
+  pub activity_type: String,
+  pub duration_seconds: Option<i64>,
+  pub rtss: Option<f64>,
+  pub hr_zone: Option<HrZone>,
+}
+
+/// Training context computed from rolling windows
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrainingContext {
+  /// Acute Training Load: 7-day rTSS sum
+  pub atl: Option<f64>,
+
+  /// Chronic Training Load: 42-day rTSS average
+  pub ctl: Option<f64>,
+
+  /// Training Stress Balance: CTL - ATL (form indicator)
+  pub tsb: Option<f64>,
+
+  /// Weekly volume in hours by modality
+  pub weekly_volume: WeeklyVolume,
+
+  /// Week-over-week volume change percentage
+  pub week_over_week_delta_pct: Option<f64>,
+
+  /// Intensity distribution (zone percentages) over 7 days
+  pub intensity_distribution: IntensityDistribution,
+
+  /// Longest session by modality in last 28 days (in minutes)
+  pub longest_session: LongestSession,
+
+  /// Consistency: workout count vs expected over 28 days (percentage)
+  pub consistency_pct: Option<f64>,
+
+  /// Number of workouts this week
+  pub workouts_this_week: i32,
+}
+
+/// Weekly volume breakdown by modality
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WeeklyVolume {
+  pub total_hrs: f64,
+  pub run_hrs: f64,
+  pub ride_hrs: f64,
+  pub other_hrs: f64,
+}
+
+/// Intensity distribution by HR zone
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct IntensityDistribution {
+  pub z1_pct: f64,
+  pub z2_pct: f64,
+  pub z3_pct: f64,
+  pub z4_pct: f64,
+  pub z5_pct: f64,
+}
+
+/// Longest session by modality
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LongestSession {
+  pub run_min: Option<f64>,
+  pub ride_min: Option<f64>,
+}
+
+impl TrainingContext {
+  /// Compute training context from a list of recent workouts
+  pub fn compute(workouts: &[WorkoutSummary], settings: &UserSettings) -> Self {
+    let now = chrono::Utc::now();
+
+    // Filter workouts by time windows
+    let days_7: Vec<_> = workouts
+      .iter()
+      .filter(|w| (now - w.started_at).num_days() < 7)
+      .collect();
+
+    let days_14: Vec<_> = workouts
+      .iter()
+      .filter(|w| (now - w.started_at).num_days() < 14)
+      .collect();
+
+    let days_28: Vec<_> = workouts
+      .iter()
+      .filter(|w| (now - w.started_at).num_days() < 28)
+      .collect();
+
+    let days_42: Vec<_> = workouts
+      .iter()
+      .filter(|w| (now - w.started_at).num_days() < 42)
+      .collect();
+
+    // ATL: 7-day rTSS sum
+    let atl = Self::compute_rtss_sum(&days_7);
+
+    // CTL: 42-day rTSS average (daily average)
+    let ctl = Self::compute_rtss_avg(&days_42, 42);
+
+    // TSB: CTL - ATL
+    let tsb = match (ctl, atl) {
+      (Some(c), Some(a)) => Some(c - a / 7.0), // Normalize ATL to daily
+      _ => None,
+    };
+
+    // Weekly volume
+    let weekly_volume = Self::compute_weekly_volume(&days_7);
+
+    // Week-over-week delta
+    let this_week_volume = weekly_volume.total_hrs;
+    let last_week_volume = Self::compute_weekly_volume(
+      &days_14
+        .iter()
+        .filter(|w| (now - w.started_at).num_days() >= 7)
+        .cloned()
+        .collect::<Vec<_>>(),
+    )
+    .total_hrs;
+
+    let week_over_week_delta_pct = if last_week_volume > 0.0 {
+      Some(((this_week_volume - last_week_volume) / last_week_volume) * 100.0)
+    } else if this_week_volume > 0.0 {
+      Some(100.0) // First week with data
+    } else {
+      None
+    };
+
+    // Intensity distribution
+    let intensity_distribution = Self::compute_intensity_distribution(&days_7);
+
+    // Longest session (28 days)
+    let longest_session = Self::compute_longest_session(&days_28);
+
+    // Consistency: actual workouts vs expected
+    let expected_workouts_28d = settings.training_days_per_week as f64 * 4.0;
+    let actual_workouts_28d = days_28.len() as f64;
+    let consistency_pct = if expected_workouts_28d > 0.0 {
+      Some((actual_workouts_28d / expected_workouts_28d) * 100.0)
+    } else {
+      None
+    };
+
+    let workouts_this_week = days_7.len() as i32;
+
+    Self {
+      atl,
+      ctl,
+      tsb,
+      weekly_volume,
+      week_over_week_delta_pct,
+      intensity_distribution,
+      longest_session,
+      consistency_pct,
+      workouts_this_week,
+    }
+  }
+
+  fn compute_rtss_sum(workouts: &[&WorkoutSummary]) -> Option<f64> {
+    let sum: f64 = workouts.iter().filter_map(|w| w.rtss).sum();
+    if sum > 0.0 {
+      Some(sum)
+    } else {
+      None
+    }
+  }
+
+  fn compute_rtss_avg(workouts: &[&WorkoutSummary], days: i64) -> Option<f64> {
+    let sum: f64 = workouts.iter().filter_map(|w| w.rtss).sum();
+    if sum > 0.0 {
+      Some(sum / days as f64)
+    } else {
+      None
+    }
+  }
+
+  fn compute_weekly_volume(workouts: &[&WorkoutSummary]) -> WeeklyVolume {
+    let mut volume = WeeklyVolume::default();
+
+    for w in workouts {
+      let hrs = w.duration_seconds.map(|s| s as f64 / 3600.0).unwrap_or(0.0);
+      volume.total_hrs += hrs;
+
+      match w.activity_type.to_lowercase().as_str() {
+        "run" => volume.run_hrs += hrs,
+        "ride" => volume.ride_hrs += hrs,
+        _ => volume.other_hrs += hrs,
+      }
+    }
+
+    volume
+  }
+
+  fn compute_intensity_distribution(workouts: &[&WorkoutSummary]) -> IntensityDistribution {
+    let mut dist = IntensityDistribution::default();
+    let mut total_duration = 0.0;
+
+    // Sum duration by zone
+    let mut z1_duration = 0.0;
+    let mut z2_duration = 0.0;
+    let mut z3_duration = 0.0;
+    let mut z4_duration = 0.0;
+    let mut z5_duration = 0.0;
+
+    for w in workouts {
+      if let (Some(zone), Some(dur)) = (&w.hr_zone, w.duration_seconds) {
+        let dur_min = dur as f64 / 60.0;
+        total_duration += dur_min;
+        match zone {
+          HrZone::Z1 => z1_duration += dur_min,
+          HrZone::Z2 => z2_duration += dur_min,
+          HrZone::Z3 => z3_duration += dur_min,
+          HrZone::Z4 => z4_duration += dur_min,
+          HrZone::Z5 => z5_duration += dur_min,
+        }
+      }
+    }
+
+    if total_duration > 0.0 {
+      dist.z1_pct = (z1_duration / total_duration) * 100.0;
+      dist.z2_pct = (z2_duration / total_duration) * 100.0;
+      dist.z3_pct = (z3_duration / total_duration) * 100.0;
+      dist.z4_pct = (z4_duration / total_duration) * 100.0;
+      dist.z5_pct = (z5_duration / total_duration) * 100.0;
+    }
+
+    dist
+  }
+
+  fn compute_longest_session(workouts: &[&WorkoutSummary]) -> LongestSession {
+    let mut longest = LongestSession::default();
+
+    for w in workouts {
+      let dur_min = w.duration_seconds.map(|s| s as f64 / 60.0);
+
+      match w.activity_type.to_lowercase().as_str() {
+        "run" => {
+          if let Some(d) = dur_min {
+            longest.run_min = Some(longest.run_min.map_or(d, |curr| curr.max(d)));
+          }
+        }
+        "ride" => {
+          if let Some(d) = dur_min {
+            longest.ride_min = Some(longest.ride_min.map_or(d, |curr| curr.max(d)));
+          }
+        }
+        _ => {}
+      }
+    }
+
+    longest
+  }
+}
+
+/// ---------------------------------------------------------------------------
 /// Tests
 /// ---------------------------------------------------------------------------
 

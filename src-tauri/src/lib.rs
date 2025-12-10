@@ -45,6 +45,7 @@ pub fn run() {
       commands::analysis::update_user_settings,
       commands::analysis::compute_workout_metrics,
       commands::analysis::get_workouts_with_metrics,
+      commands::analysis::get_training_context,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

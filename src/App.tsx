@@ -46,6 +46,38 @@ interface WorkoutWithMetrics {
   hr_zone: string | null;
 }
 
+interface WeeklyVolume {
+  total_hrs: number;
+  run_hrs: number;
+  ride_hrs: number;
+  other_hrs: number;
+}
+
+interface IntensityDistribution {
+  z1_pct: number;
+  z2_pct: number;
+  z3_pct: number;
+  z4_pct: number;
+  z5_pct: number;
+}
+
+interface LongestSession {
+  run_min: number | null;
+  ride_min: number | null;
+}
+
+interface TrainingContext {
+  atl: number | null;
+  ctl: number | null;
+  tsb: number | null;
+  weekly_volume: WeeklyVolume;
+  week_over_week_delta_pct: number | null;
+  intensity_distribution: IntensityDistribution;
+  longest_session: LongestSession;
+  consistency_pct: number | null;
+  workouts_this_week: number;
+}
+
 function App() {
   const [stravaStatus, setStravaStatus] = useState<StravaAuthStatus | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -55,6 +87,7 @@ function App() {
   const [computeResult, setComputeResult] = useState<ComputeResult | null>(null);
   const [workouts, setWorkouts] = useState<WorkoutWithMetrics[]>([]);
   const [settings, setSettings] = useState<UserSettings | null>(null);
+  const [trainingContext, setTrainingContext] = useState<TrainingContext | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
 
@@ -66,6 +99,7 @@ function App() {
     checkStravaStatus();
     loadWorkouts();
     loadSettings();
+    loadTrainingContext();
   }, []);
 
   async function checkStravaStatus() {
@@ -95,6 +129,15 @@ function App() {
       setLthrInput(data.lthr?.toString() || "");
     } catch (e) {
       console.error("Failed to load settings:", e);
+    }
+  }
+
+  async function loadTrainingContext() {
+    try {
+      const data = await invoke<TrainingContext>("get_training_context");
+      setTrainingContext(data);
+    } catch (e) {
+      console.error("Failed to load training context:", e);
     }
   }
 
@@ -145,6 +188,7 @@ function App() {
       const result = await invoke<SyncResult>("strava_sync_activities");
       setSyncResult(result);
       await loadWorkouts();
+      await loadTrainingContext();
     } catch (e) {
       setError(`Sync failed: ${e}`);
     } finally {
@@ -161,6 +205,7 @@ function App() {
       const result = await invoke<ComputeResult>("compute_workout_metrics");
       setComputeResult(result);
       await loadWorkouts();
+      await loadTrainingContext();
     } catch (e) {
       setError(`Compute failed: ${e}`);
     } finally {
@@ -285,6 +330,62 @@ function App() {
 
         {error && <p className="error">{error}</p>}
       </div>
+
+      {/* Training Load Card */}
+      {trainingContext && (
+        <div className="card">
+          <h2>Training Load</h2>
+          <div className="training-load-grid">
+            <div className="load-metric">
+              <span className="load-label">ATL</span>
+              <span className="load-value atl">{trainingContext.atl?.toFixed(0) || "-"}</span>
+              <span className="load-sublabel">7-day load</span>
+            </div>
+            <div className="load-metric">
+              <span className="load-label">CTL</span>
+              <span className="load-value ctl">{trainingContext.ctl?.toFixed(0) || "-"}</span>
+              <span className="load-sublabel">Fitness</span>
+            </div>
+            <div className="load-metric">
+              <span className="load-label">TSB</span>
+              <span className={`load-value tsb ${trainingContext.tsb !== null ? (trainingContext.tsb < -20 ? "fatigued" : trainingContext.tsb > 5 ? "fresh" : "neutral") : ""}`}>
+                {trainingContext.tsb?.toFixed(0) || "-"}
+              </span>
+              <span className="load-sublabel">Form</span>
+            </div>
+          </div>
+
+          <div className="weekly-volume">
+            <h3>This Week</h3>
+            <div className="volume-bar">
+              <div className="volume-segment run" style={{ flex: trainingContext.weekly_volume.run_hrs }} />
+              <div className="volume-segment ride" style={{ flex: trainingContext.weekly_volume.ride_hrs }} />
+              <div className="volume-segment other" style={{ flex: trainingContext.weekly_volume.other_hrs }} />
+            </div>
+            <div className="volume-legend">
+              <span>{trainingContext.weekly_volume.total_hrs.toFixed(1)}h total</span>
+              {trainingContext.weekly_volume.run_hrs > 0 && (
+                <span className="run-label">{trainingContext.weekly_volume.run_hrs.toFixed(1)}h run</span>
+              )}
+              {trainingContext.weekly_volume.ride_hrs > 0 && (
+                <span className="ride-label">{trainingContext.weekly_volume.ride_hrs.toFixed(1)}h ride</span>
+              )}
+              {trainingContext.week_over_week_delta_pct !== null && (
+                <span className={trainingContext.week_over_week_delta_pct >= 0 ? "delta-up" : "delta-down"}>
+                  {trainingContext.week_over_week_delta_pct >= 0 ? "+" : ""}{trainingContext.week_over_week_delta_pct.toFixed(0)}% vs last week
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="context-stats">
+            <span>{trainingContext.workouts_this_week} workouts this week</span>
+            {trainingContext.consistency_pct !== null && (
+              <span>Consistency: {trainingContext.consistency_pct.toFixed(0)}%</span>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Metrics Computation Card */}
       {workouts.length > 0 && hasSettings && needsCompute && (
