@@ -89,7 +89,54 @@ struct ClaudeErrorDetail {
 /// Workout Analysis Response (from Claude)
 /// ---------------------------------------------------------------------------
 
-/// The structured output we request from Claude
+/// Enhanced workout analysis with deep dive content
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkoutAnalysisV2 {
+  /// Deep workout analysis
+  pub workout_analysis: WorkoutBreakdown,
+
+  /// Progression status (echoes what Rust computed, with explanations)
+  pub progression: Option<ProgressionResponse>,
+
+  /// Plan status
+  pub plan_status: Option<PlanStatusResponse>,
+
+  /// What to do tomorrow
+  pub tomorrow: String,
+
+  /// Risk flags
+  pub risk_flags: Vec<String>,
+
+  /// Goal-specific notes
+  pub goal_notes: Option<String>,
+}
+
+/// Deep workout breakdown
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkoutBreakdown {
+  pub summary: String,
+  pub execution: String,
+  pub hr_insights: String,
+  pub comparison: Option<String>,
+}
+
+/// Progression status from LLM
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProgressionResponse {
+  pub run_interval_status: String,
+  pub run_interval_note: String,
+  pub long_run_status: Option<String>,
+  pub long_run_note: Option<String>,
+}
+
+/// Plan status from LLM
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanStatusResponse {
+  pub week_on_track: bool,
+  pub adjustment_needed: Option<String>,
+}
+
+/// Legacy format (backward compatible)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkoutAnalysis {
   /// Brief summary of the workout
@@ -103,6 +150,17 @@ pub struct WorkoutAnalysis {
 
   /// Notes specific to Kilimanjaro or marathon training goals
   pub goal_notes: Option<String>,
+}
+
+impl From<WorkoutAnalysisV2> for WorkoutAnalysis {
+  fn from(v2: WorkoutAnalysisV2) -> Self {
+    Self {
+      summary: v2.workout_analysis.summary,
+      tomorrow_recommendation: v2.tomorrow,
+      risk_flags: v2.risk_flags,
+      goal_notes: v2.goal_notes,
+    }
+  }
 }
 
 /// ---------------------------------------------------------------------------
@@ -181,8 +239,48 @@ impl ClaudeClient {
     Ok((text, claude_response.usage))
   }
 
-  /// Analyze a workout with structured JSON output
+  /// Analyze a workout with structured JSON output (legacy format, for backward compatibility)
   pub async fn analyze_workout(
+    &self,
+    context_json: &str,
+  ) -> Result<(WorkoutAnalysis, Usage), LlmError> {
+    // Try enhanced format first, fall back to legacy if needed
+    match self.analyze_workout_enhanced(context_json).await {
+      Ok((v2, usage)) => Ok((v2.into(), usage)),
+      Err(_) => self.analyze_workout_legacy(context_json).await,
+    }
+  }
+
+  /// Analyze a workout with the enhanced V2 format (deep analysis)
+  pub async fn analyze_workout_enhanced(
+    &self,
+    context_json: &str,
+  ) -> Result<(WorkoutAnalysisV2, Usage), LlmError> {
+    let system_prompt = include_str!("prompts/coach_system.txt");
+
+    let user_message = format!(
+      r#"Analyze this workout and provide coaching feedback.
+
+TRAINING CONTEXT:
+{}
+
+Respond with valid JSON matching the OUTPUT FORMAT specified in your instructions."#,
+      context_json
+    );
+
+    let (response_text, usage) = self.complete(system_prompt, &user_message, 1500).await?;
+
+    // Parse the JSON response
+    let json_str = extract_json(&response_text)?;
+
+    let analysis: WorkoutAnalysisV2 =
+      serde_json::from_str(&json_str).map_err(|e| LlmError::Parse(format!("{}: {}", e, json_str)))?;
+
+    Ok((analysis, usage))
+  }
+
+  /// Legacy analysis format (simpler, backward compatible)
+  async fn analyze_workout_legacy(
     &self,
     context_json: &str,
   ) -> Result<(WorkoutAnalysis, Usage), LlmError> {
@@ -208,8 +306,6 @@ Be direct and specific. Reference the actual numbers provided."#,
 
     let (response_text, usage) = self.complete(system_prompt, &user_message, 1024).await?;
 
-    // Parse the JSON response
-    // Claude sometimes wraps JSON in markdown code blocks, so we need to extract it
     let json_str = extract_json(&response_text)?;
 
     let analysis: WorkoutAnalysis =

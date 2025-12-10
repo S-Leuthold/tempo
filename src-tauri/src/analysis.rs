@@ -591,6 +591,8 @@ impl TrainingFlags {
 /// Context Package for LLM
 /// ---------------------------------------------------------------------------
 
+use crate::progression::ProgressionSummary;
+
 /// The complete context package sent to Claude for analysis
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextPackage {
@@ -605,6 +607,10 @@ pub struct ContextPackage {
 
   /// User settings relevant to analysis
   pub user: UserContext,
+
+  /// Progression summary (computed by Rust, explains engine decisions to LLM)
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub progression_summary: Option<ProgressionSummary>,
 }
 
 /// Workout-specific context for the LLM
@@ -666,7 +672,14 @@ impl ContextPackage {
       context: training_context,
       flags: flags.to_string_list(),
       user,
+      progression_summary: None,
     }
+  }
+
+  /// Add progression summary (from Rust progression engine)
+  pub fn with_progression_summary(mut self, summary: ProgressionSummary) -> Self {
+    self.progression_summary = Some(summary);
+    self
   }
 
   /// Serialize to JSON for the LLM prompt
