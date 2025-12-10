@@ -3,6 +3,7 @@ mod db;
 mod llm;
 mod models;
 mod commands;
+mod progression;
 mod strava;
 
 use db::AppState;
