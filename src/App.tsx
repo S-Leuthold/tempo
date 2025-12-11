@@ -92,16 +92,16 @@ interface TrainingContext {
   workouts_this_week: number;
 }
 
-// Legacy format (still stored in DB)
-interface WorkoutAnalysis {
-  id: number | null;
-  workout_id: number;
-  summary: string;
-  tomorrow_recommendation: string;
-  risk_flags: string[];
-  goal_notes: string | null;
-  created_at: string | null;
-}
+// Legacy format (still stored in DB) - not currently used in frontend
+// interface WorkoutAnalysis {
+//   id: number | null;
+//   workout_id: number;
+//   summary: string;
+//   tomorrow_recommendation: string;
+//   risk_flags: string[];
+//   goal_notes: string | null;
+//   created_at: string | null;
+// }
 
 interface AnalysisResult {
   workout_id: number;
@@ -459,10 +459,10 @@ function App() {
           <div>
             <p className="status connected">Connected</p>
             <div className="button-row">
-              <button onClick={syncOuraData} disabled={isSyncingOura}>
+              <button type="button" onClick={syncOuraData} disabled={isSyncingOura}>
                 {isSyncingOura ? "Syncing..." : "Sync Oura Data"}
               </button>
-              <button onClick={disconnectOura} className="secondary">
+              <button type="button" onClick={disconnectOura} className="secondary">
                 Disconnect
               </button>
             </div>

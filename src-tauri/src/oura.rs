@@ -536,3 +536,74 @@ pub async fn fetch_daily_readiness(
 
   Ok(response.json().await?)
 }
+
+/// ---------------------------------------------------------------------------
+/// Tests
+/// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn test_compute_sleep_debt_with_deficit() {
+    // 6.5hr average vs 8hr target = 1.5hr * 7 days = 10.5hr debt
+    let result = OuraContext::compute_sleep_debt(Some(6.5));
+    assert_eq!(result, Some(10.5));
+  }
+
+  #[test]
+  fn test_compute_sleep_debt_no_deficit() {
+    // 8.5hr average = no debt
+    let result = OuraContext::compute_sleep_debt(Some(8.5));
+    assert_eq!(result, None);
+  }
+
+  #[test]
+  fn test_compute_sleep_debt_none() {
+    let result = OuraContext::compute_sleep_debt(None);
+    assert_eq!(result, None);
+  }
+
+  #[test]
+  fn test_hrv_trend_declining() {
+    // Current 45ms vs avg 55ms = -18% = declining
+    let result = OuraContext::determine_hrv_trend(Some(45.0), Some(55.0));
+    assert_eq!(result, Some("declining".to_string()));
+  }
+
+  #[test]
+  fn test_hrv_trend_improving() {
+    // Current 60ms vs avg 55ms = +9% = improving
+    let result = OuraContext::determine_hrv_trend(Some(60.0), Some(55.0));
+    assert_eq!(result, Some("improving".to_string()));
+  }
+
+  #[test]
+  fn test_hrv_trend_stable() {
+    // Current 56ms vs avg 55ms = +1.8% = stable
+    let result = OuraContext::determine_hrv_trend(Some(56.0), Some(55.0));
+    assert_eq!(result, Some("stable".to_string()));
+  }
+
+  #[test]
+  fn test_resting_hr_trend_up() {
+    // Current 55 vs avg 50 = +5 = up
+    let result = OuraContext::determine_resting_hr_trend(Some(55), Some(50));
+    assert_eq!(result, Some("up".to_string()));
+  }
+
+  #[test]
+  fn test_resting_hr_trend_down() {
+    // Current 48 vs avg 52 = -4 = down
+    let result = OuraContext::determine_resting_hr_trend(Some(48), Some(52));
+    assert_eq!(result, Some("down".to_string()));
+  }
+
+  #[test]
+  fn test_resting_hr_trend_stable() {
+    // Current 51 vs avg 50 = +1 = stable
+    let result = OuraContext::determine_resting_hr_trend(Some(51), Some(50));
+    assert_eq!(result, Some("stable".to_string()));
+  }
+}

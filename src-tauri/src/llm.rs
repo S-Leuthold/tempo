@@ -677,4 +677,70 @@ Hope that helps!"#;
     let result = extract_json(input).unwrap();
     assert!(result.contains("summary"));
   }
+
+  #[test]
+  fn test_v4_to_legacy_conversion() {
+    let v4 = WorkoutAnalysisV4 {
+      performance: PerformanceCard {
+        metric_name: "pace".to_string(),
+        comparison_date: "2025-12-09".to_string(),
+        comparison_value: "7:20/km".to_string(),
+        today_value: "7:22/km".to_string(),
+        delta: "+2 sec/km".to_string(),
+        insight: "Pace holding steady around 7:20/km across last 3 runs.".to_string(),
+      },
+      hr_efficiency: HrEfficiencyCard {
+        avg_hr: 136,
+        hr_zone: "Z2".to_string(),
+        hr_pct_max: 72,
+        hr_assessment: "HR firmly in Z2 throughout".to_string(),
+        efficiency_trend: None,
+      },
+      training_status: TrainingStatusCard {
+        tsb_value: -12.0,
+        tsb_band: "moderate_fatigue".to_string(),
+        tsb_assessment: "Improving from -18".to_string(),
+        top_flags: vec!["volume_spike".to_string()],
+        adherence_note: "6/6 sessions - perfect week".to_string(),
+        progression_state: "All on hold until load stabilizes".to_string(),
+      },
+      tomorrow: TomorrowCard {
+        activity_type: "Ride".to_string(),
+        duration_min: 40,
+        duration_label: "SHORT".to_string(),
+        intensity: "Z2".to_string(),
+        goal: "load_management".to_string(),
+        rationale: "TSB -12 + volume spike = keep it short and easy".to_string(),
+        confidence: "high".to_string(),
+      },
+      eyes_on: Some(EyesOnCard {
+        priorities: vec![
+          FlagPriority {
+            flag: "long_run_gap".to_string(),
+            current_value: Some("21 days since 30+ min".to_string()),
+            threshold: "Weekly long run".to_string(),
+            action: "Hit Saturday's long session".to_string(),
+            why_it_matters: "Extended gaps reduce aerobic durability".to_string(),
+          },
+        ],
+      }),
+    };
+
+    let legacy: WorkoutAnalysis = v4.into();
+
+    // Check summary combines performance + HR assessment
+    assert!(legacy.summary.contains("Pace holding steady"));
+    assert!(legacy.summary.contains("HR firmly in Z2"));
+
+    // Check tomorrow formats activity, duration, intensity, rationale
+    assert!(legacy.tomorrow_recommendation.contains("Ride"));
+    assert!(legacy.tomorrow_recommendation.contains("40 min"));
+    assert!(legacy.tomorrow_recommendation.contains("Z2"));
+    assert!(legacy.tomorrow_recommendation.contains("TSB -12"));
+
+    // Check flags are extracted from eyes_on priorities
+    assert_eq!(legacy.risk_flags.len(), 1);
+    assert!(legacy.risk_flags[0].contains("long_run_gap"));
+    assert!(legacy.risk_flags[0].contains("Hit Saturday's long session"));
+  }
 }
