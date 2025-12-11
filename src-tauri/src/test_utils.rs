@@ -7,7 +7,6 @@
 //! - Helper assertions
 
 use crate::analysis::{UserSettings, TrainingContext, WorkoutSummary};
-use crate::models::workout::Workout;
 use crate::strava::StravaActivity;
 use chrono::{DateTime, Duration, Utc};
 use sqlx::SqlitePool;
@@ -120,6 +119,7 @@ pub async fn seed_test_user_settings(pool: &SqlitePool) -> UserSettings {
 }
 
 /// Seed the database with test progression dimensions
+/// Uses INSERT OR REPLACE to handle duplicate seeds
 pub async fn seed_test_progression_dimensions(pool: &SqlitePool) -> Vec<String> {
   let dimensions = vec![
     ("run_interval", "4:1", "continuous_45", "building"),
@@ -132,7 +132,7 @@ pub async fn seed_test_progression_dimensions(pool: &SqlitePool) -> Vec<String> 
   for (name, current, ceiling, status) in dimensions {
     sqlx::query(
       r#"
-      INSERT INTO progression_dimensions (
+      INSERT OR REPLACE INTO progression_dimensions (
         name, current_value, ceiling_value, step_config_json,
         status, last_change_at
       )
