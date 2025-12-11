@@ -86,32 +86,191 @@ struct ClaudeErrorDetail {
 }
 
 /// ---------------------------------------------------------------------------
-/// Workout Analysis Response (from Claude)
+/// Workout Analysis Response (from Claude) - V3 Trend-Focused Format
 /// ---------------------------------------------------------------------------
 
-/// Enhanced workout analysis with deep dive content
+/// V3 analysis format with trend insight and structured prescription
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkoutAnalysisV3 {
+  /// Trend analysis comparing to recent workouts
+  pub trend_insight: TrendInsight,
+
+  /// Performance interpretation for this workout
+  pub performance_interpretation: PerformanceInterpretation,
+
+  /// Decision logic for each dimension (keyed by dimension name)
+  pub decision_logic: std::collections::HashMap<String, DimensionDecision>,
+
+  /// Structured prescription for tomorrow
+  pub tomorrow_prescription: TomorrowPrescription,
+
+  /// Prioritized flags with actions
+  #[serde(default)]
+  pub flags_and_priorities: Vec<FlagWithAction>,
+}
+
+/// Trend insight comparing to recent similar workouts
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrendInsight {
+  pub metric_compared: String,
+  pub direction: String,
+  pub delta: String,
+  pub interpretation: String,
+}
+
+/// Performance interpretation for the current workout
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PerformanceInterpretation {
+  pub execution_quality: String,
+  #[serde(default)]
+  pub efficiency_note: Option<String>,
+  pub context_vs_trend: String,
+}
+
+/// Decision logic for a single dimension
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DimensionDecision {
+  pub engine_decision: String,
+  pub explanation: String,
+  pub action: String,
+}
+
+/// Structured prescription for tomorrow
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TomorrowPrescription {
+  pub activity_type: String,
+  pub duration_min: i32,
+  pub intensity: String,
+  pub rationale: String,
+}
+
+/// Flag with action
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FlagWithAction {
+  pub flag: String,
+  pub action: String,
+}
+
+/// ---------------------------------------------------------------------------
+/// Workout Analysis Response (from Claude) - V4 Multi-Card Format
+/// ---------------------------------------------------------------------------
+
+/// V4 analysis format with purpose-built cards
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkoutAnalysisV4 {
+  pub performance: PerformanceCard,
+  pub hr_efficiency: HrEfficiencyCard,
+  pub training_status: TrainingStatusCard,
+  pub tomorrow: TomorrowCard,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub eyes_on: Option<EyesOnCard>,
+}
+
+/// Card 1: Pace/power performance trends
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PerformanceCard {
+  pub metric_name: String,
+  pub comparison_date: String,
+  pub comparison_value: String,
+  pub today_value: String,
+  pub delta: String,
+  pub insight: String,
+}
+
+/// Card 2: HR and efficiency assessment
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HrEfficiencyCard {
+  pub avg_hr: i64,
+  pub hr_zone: String,
+  pub hr_pct_max: i64,
+  pub hr_assessment: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub efficiency_trend: Option<String>,
+}
+
+/// Card 3: Training status (fatigue, flags, adherence, progression)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrainingStatusCard {
+  pub tsb_value: f64,
+  pub tsb_band: String,
+  pub tsb_assessment: String,
+  pub top_flags: Vec<String>,
+  pub adherence_note: String,
+  pub progression_state: String,
+}
+
+/// Card 4: Tomorrow's prescription
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TomorrowCard {
+  pub activity_type: String,
+  pub duration_min: i32,
+  pub duration_label: String,
+  pub intensity: String,
+  pub goal: String,
+  pub rationale: String,
+  pub confidence: String,
+}
+
+/// Card 5: Eyes on (actionable flags)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EyesOnCard {
+  pub priorities: Vec<FlagPriority>,
+}
+
+/// Flag with priority, current value, threshold, action, and consequence
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FlagPriority {
+  pub flag: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub current_value: Option<String>,
+  pub threshold: String,
+  pub action: String,
+  pub why_it_matters: String,
+}
+
+/// Convert V4 to legacy format for DB storage
+impl From<WorkoutAnalysisV4> for WorkoutAnalysis {
+  fn from(v4: WorkoutAnalysisV4) -> Self {
+    let summary = format!("{} {}",
+      v4.performance.insight,
+      v4.hr_efficiency.hr_assessment
+    );
+
+    let tomorrow = format!(
+      "{} for {} min at {} intensity. {}",
+      v4.tomorrow.activity_type,
+      v4.tomorrow.duration_min,
+      v4.tomorrow.intensity,
+      v4.tomorrow.rationale
+    );
+
+    let risk_flags = v4.eyes_on
+      .map(|eyes| eyes.priorities.into_iter()
+        .map(|p| format!("{}: {}", p.flag, p.action))
+        .collect())
+      .unwrap_or_default();
+
+    Self {
+      summary,
+      tomorrow_recommendation: tomorrow,
+      risk_flags,
+      goal_notes: None,
+    }
+  }
+}
+
+/// Legacy V2 format (for backward compatibility)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkoutAnalysisV2 {
-  /// Deep workout analysis
   pub workout_analysis: WorkoutBreakdown,
-
-  /// Progression status (echoes what Rust computed, with explanations)
   pub progression: Option<ProgressionResponse>,
-
-  /// Plan status
   pub plan_status: Option<PlanStatusResponse>,
-
-  /// What to do tomorrow
   pub tomorrow: String,
-
-  /// Risk flags
   pub risk_flags: Vec<String>,
-
-  /// Goal-specific notes
   pub goal_notes: Option<String>,
 }
 
-/// Deep workout breakdown
+/// Deep workout breakdown (V2 format)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkoutBreakdown {
   pub summary: String,
@@ -120,7 +279,7 @@ pub struct WorkoutBreakdown {
   pub comparison: Option<String>,
 }
 
-/// Progression status from LLM
+/// Progression status from LLM (V2 format)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProgressionResponse {
   pub run_interval_status: String,
@@ -129,14 +288,14 @@ pub struct ProgressionResponse {
   pub long_run_note: Option<String>,
 }
 
-/// Plan status from LLM
+/// Plan status from LLM (V2 format)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanStatusResponse {
   pub week_on_track: bool,
   pub adjustment_needed: Option<String>,
 }
 
-/// Legacy format (backward compatible)
+/// Legacy format (backward compatible - stored in DB)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkoutAnalysis {
   /// Brief summary of the workout
@@ -148,8 +307,43 @@ pub struct WorkoutAnalysis {
   /// Risk flags or concerns identified
   pub risk_flags: Vec<String>,
 
-  /// Notes specific to Kilimanjaro or marathon training goals
+  /// Notes specific to training goals
   pub goal_notes: Option<String>,
+}
+
+/// Convert V3 to legacy format for storage
+impl From<WorkoutAnalysisV3> for WorkoutAnalysis {
+  fn from(v3: WorkoutAnalysisV3) -> Self {
+    // Build summary from trend insight and performance interpretation
+    let summary = format!(
+      "{}. {}",
+      v3.trend_insight.interpretation,
+      v3.performance_interpretation.execution_quality
+    );
+
+    // Build recommendation from prescription
+    let tomorrow = format!(
+      "{} for {} min at {} intensity. {}",
+      v3.tomorrow_prescription.activity_type,
+      v3.tomorrow_prescription.duration_min,
+      v3.tomorrow_prescription.intensity,
+      v3.tomorrow_prescription.rationale
+    );
+
+    // Extract flag names
+    let risk_flags: Vec<String> = v3
+      .flags_and_priorities
+      .into_iter()
+      .map(|f| format!("{}: {}", f.flag, f.action))
+      .collect();
+
+    Self {
+      summary,
+      tomorrow_recommendation: tomorrow,
+      risk_flags,
+      goal_notes: None,
+    }
+  }
 }
 
 impl From<WorkoutAnalysisV2> for WorkoutAnalysis {
@@ -239,20 +433,114 @@ impl ClaudeClient {
     Ok((text, claude_response.usage))
   }
 
-  /// Analyze a workout with structured JSON output (legacy format, for backward compatibility)
+  /// Analyze a workout and return V4 format (for frontend)
+  pub async fn analyze_workout_v4_or_fallback(
+    &self,
+    context_json: &str,
+  ) -> Result<(WorkoutAnalysisV4, Usage), LlmError> {
+    // Try V4 first (multi-card), fall back to converting V3/V2/legacy to V4 structure
+    match self.analyze_workout_v4(context_json).await {
+      Ok((v4, usage)) => {
+        println!("LLM returned V4 format");
+        Ok((v4, usage))
+      }
+      Err(e) => {
+        println!("V4 parse failed: {}, trying V3", e);
+        // V3 fallback - would need conversion logic
+        // For now, return error to force V4
+        Err(e)
+      }
+    }
+  }
+
+  /// Analyze a workout with structured JSON output (returns legacy format for DB storage)
   pub async fn analyze_workout(
     &self,
     context_json: &str,
   ) -> Result<(WorkoutAnalysis, Usage), LlmError> {
-    // Try enhanced format first, fall back to legacy if needed
-    match self.analyze_workout_enhanced(context_json).await {
-      Ok((v2, usage)) => Ok((v2.into(), usage)),
-      Err(_) => self.analyze_workout_legacy(context_json).await,
+    // Try V4 first (multi-card), fall back to V3, V2, then legacy
+    match self.analyze_workout_v4(context_json).await {
+      Ok((v4, usage)) => {
+        println!("LLM returned V4 format");
+        Ok((v4.into(), usage))
+      }
+      Err(e) => {
+        println!("V4 parse failed: {}, trying V3", e);
+        match self.analyze_workout_v3(context_json).await {
+          Ok((v3, usage)) => {
+            println!("LLM returned V3 format");
+            Ok((v3.into(), usage))
+          }
+          Err(e) => {
+            println!("V3 parse failed: {}, trying V2", e);
+            match self.analyze_workout_v2(context_json).await {
+              Ok((v2, usage)) => Ok((v2.into(), usage)),
+              Err(_) => self.analyze_workout_legacy(context_json).await,
+            }
+          }
+        }
+      }
     }
   }
 
-  /// Analyze a workout with the enhanced V2 format (deep analysis)
-  pub async fn analyze_workout_enhanced(
+  /// Analyze a workout with V4 format (multi-card system)
+  async fn analyze_workout_v4(
+    &self,
+    context_json: &str,
+  ) -> Result<(WorkoutAnalysisV4, Usage), LlmError> {
+    let system_prompt = include_str!("prompts/coach_system_v4.txt");
+
+    let user_message = format!(
+      r#"Analyze this workout and provide card-based coaching feedback.
+
+TRAINING CONTEXT:
+{}
+
+Respond with valid JSON matching the V4 OUTPUT STRUCTURE."#,
+      context_json
+    );
+
+    let (response_text, usage) = self.complete(system_prompt, &user_message, 2500).await?;
+
+    let json_str = extract_json(&response_text)?;
+
+    let analysis: WorkoutAnalysisV4 =
+      serde_json::from_str(&json_str)
+        .map_err(|e| LlmError::Parse(format!("{}: {}", e, json_str)))?;
+
+    Ok((analysis, usage))
+  }
+
+  /// Analyze a workout with V3 format (trend-focused with structured prescription)
+  async fn analyze_workout_v3(
+    &self,
+    context_json: &str,
+  ) -> Result<(WorkoutAnalysisV3, Usage), LlmError> {
+    let system_prompt = include_str!("prompts/coach_system.txt");
+
+    let user_message = format!(
+      r#"Analyze this workout and provide coaching feedback.
+
+TRAINING CONTEXT:
+{}
+
+Respond with valid JSON matching the OUTPUT STRUCTURE specified in your instructions."#,
+      context_json
+    );
+
+    let (response_text, usage) = self.complete(system_prompt, &user_message, 2000).await?;
+
+    // Parse the JSON response
+    let json_str = extract_json(&response_text)?;
+
+    let analysis: WorkoutAnalysisV3 =
+      serde_json::from_str(&json_str).map_err(|e| LlmError::Parse(format!("{}: {}", e, json_str)))?;
+
+    Ok((analysis, usage))
+  }
+
+  /// Analyze a workout with the V2 format (deep analysis)
+  async fn analyze_workout_v2(
     &self,
     context_json: &str,
   ) -> Result<(WorkoutAnalysisV2, Usage), LlmError> {
@@ -297,7 +585,7 @@ Respond with valid JSON in this exact format:
   "summary": "Brief summary of the workout (1-2 sentences)",
   "tomorrow_recommendation": "Specific recommendation for tomorrow's training",
   "risk_flags": ["flag1", "flag2"],
-  "goal_notes": "Optional notes about Kilimanjaro/marathon progress, or null if nothing relevant"
+  "goal_notes": "Optional notes about training progress, or null if nothing relevant"
 }}
 
 Be direct and specific. Reference the actual numbers provided."#,

@@ -480,11 +480,12 @@ pub struct TrainingFlags {
 }
 
 impl TrainingFlags {
-  /// Compute training flags from workout history and context
+  /// Compute training flags from workout history, context, and progression dimensions
   pub fn compute(
     workouts: &[WorkoutSummary],
     context: &TrainingContext,
     _settings: &UserSettings,
+    dimensions: &[crate::progression::ProgressionDimension],
   ) -> Self {
     let now = chrono::Utc::now();
     let mut flags = TrainingFlags::default();
@@ -513,25 +514,40 @@ impl TrainingFlags {
       }
     }
 
-    // Long run gap: no run > 10km in 21 days
+    // Long run gap: no run >= ceiling in 21 days
+    // Get the long_run ceiling from dimensions, default to 90 min if not set
+    let long_run_ceiling_min = dimensions
+      .iter()
+      .find(|d| d.name == "long_run")
+      .and_then(|d| d.ceiling_value.parse::<f64>().ok())
+      .unwrap_or(90.0);
+    let long_run_threshold_secs = (long_run_ceiling_min * 60.0) as i64;
+
     let days_21: Vec<_> = workouts
       .iter()
       .filter(|w| (now - w.started_at).num_days() < 21)
       .collect();
 
-    // We need distance data - check if any run has duration > ~60min (proxy for 10km at 6min/km)
     let has_long_run = days_21.iter().any(|w| {
       w.activity_type.to_lowercase() == "run"
-        && w.duration_seconds.map_or(false, |d| d > 3600) // > 60 min
+        && w.duration_seconds.map_or(false, |d| d >= long_run_threshold_secs)
     });
     if !has_long_run && days_21.iter().any(|w| w.activity_type.to_lowercase() == "run") {
       flags.long_run_gap = true;
     }
 
-    // Long ride gap: no ride > 60min in 21 days
+    // Long ride gap: no ride >= ceiling in 21 days
+    // Get the z2_ride ceiling from dimensions, default to 60 min if not set
+    let z2_ride_ceiling_min = dimensions
+      .iter()
+      .find(|d| d.name == "z2_ride")
+      .and_then(|d| d.ceiling_value.parse::<f64>().ok())
+      .unwrap_or(60.0);
+    let long_ride_threshold_secs = (z2_ride_ceiling_min * 60.0) as i64;
+
     let has_long_ride = days_21.iter().any(|w| {
       w.activity_type.to_lowercase() == "ride"
-        && w.duration_seconds.map_or(false, |d| d > 3600) // > 60 min
+        && w.duration_seconds.map_or(false, |d| d >= long_ride_threshold_secs)
     });
     if !has_long_ride && days_21.iter().any(|w| w.activity_type.to_lowercase() == "ride") {
       flags.long_ride_gap = true;
@@ -554,36 +570,79 @@ impl TrainingFlags {
     flags
   }
 
-  /// Convert flags to a list of string descriptions for the LLM
-  pub fn to_string_list(&self) -> Vec<String> {
+  /// Convert flags to a prioritized list with (flag_name, priority, description)
+  /// Priority: 1 = highest, 5 = lowest
+  pub fn to_prioritized_list(&self) -> Vec<(String, u8, String)> {
     let mut flags = Vec::new();
 
-    if self.volume_spike {
-      flags.push("volume_spike: Training volume significantly above chronic average".to_string());
-    }
-    if self.volume_drop {
-      flags.push("volume_drop: Training volume significantly below chronic average".to_string());
-    }
     if self.high_fatigue {
-      flags.push("high_fatigue: TSB indicates accumulated fatigue (< -20)".to_string());
+      flags.push((
+        "high_fatigue".to_string(),
+        1,
+        "TSB indicates accumulated fatigue (< -20)".to_string(),
+      ));
     }
-    if self.peak_form {
-      flags.push("peak_form: TSB indicates good racing form (+5 to +15)".to_string());
-    }
-    if self.long_run_gap {
-      flags.push("long_run_gap: No long run (>60min) in 3 weeks".to_string());
-    }
-    if self.long_ride_gap {
-      flags.push("long_ride_gap: No long ride (>60min) in 3 weeks".to_string());
+    if self.volume_spike {
+      flags.push((
+        "volume_spike".to_string(),
+        2,
+        "Training volume significantly above chronic average".to_string(),
+      ));
     }
     if self.intensity_heavy {
-      flags.push("intensity_heavy: >40% of training in Z3+ (consider more easy volume)".to_string());
+      flags.push((
+        "intensity_heavy".to_string(),
+        3,
+        ">40% of training in Z3+".to_string(),
+      ));
+    }
+    if self.long_run_gap {
+      flags.push((
+        "long_run_gap".to_string(),
+        4,
+        "No run at ceiling duration in 3 weeks".to_string(),
+      ));
+    }
+    if self.long_ride_gap {
+      flags.push((
+        "long_ride_gap".to_string(),
+        4,
+        "No ride at ceiling duration in 3 weeks".to_string(),
+      ));
+    }
+    if self.volume_drop {
+      flags.push((
+        "volume_drop".to_string(),
+        5,
+        "Training volume significantly below chronic average".to_string(),
+      ));
+    }
+    if self.peak_form {
+      flags.push((
+        "peak_form".to_string(),
+        5,
+        "TSB indicates good racing form (+5 to +15)".to_string(),
+      ));
     }
     if self.polarized_training {
-      flags.push("polarized_training: Good - >80% in Z1-Z2 aerobic zones".to_string());
+      flags.push((
+        "polarized_training".to_string(),
+        5,
+        "Good - >80% in Z1-Z2 aerobic zones".to_string(),
+      ));
     }
 
+    // Sort by priority (lowest number = highest priority)
+    flags.sort_by_key(|(_, priority, _)| *priority);
     flags
+  }
+
+  /// Convert flags to a list of string descriptions for the LLM (legacy format)
+  pub fn to_string_list(&self) -> Vec<String> {
+    self.to_prioritized_list()
+      .into_iter()
+      .map(|(name, _, desc)| format!("{}: {}", name, desc))
+      .collect()
   }
 }
 
@@ -599,8 +658,20 @@ pub struct ContextPackage {
   /// The specific workout being analyzed
   pub workout: WorkoutContext,
 
-  /// Rolling training context
-  pub context: TrainingContext,
+  /// Recent workouts of the same type for trend comparison
+  pub recent_same_type: Vec<RecentWorkoutSummary>,
+
+  /// Recent workouts of any type for weekly context
+  pub recent_all: Vec<RecentWorkoutSummary>,
+
+  /// Fatigue metrics with TSB band
+  pub fatigue: FatigueContext,
+
+  /// Schedule and day awareness
+  pub schedule: ScheduleContext,
+
+  /// Allowed durations based on TSB (for regulated dimensions)
+  pub allowed_durations: AllowedDurations,
 
   /// Active training flags
   pub flags: Vec<String>,
@@ -608,9 +679,36 @@ pub struct ContextPackage {
   /// User settings relevant to analysis
   pub user: UserContext,
 
+  /// Significance thresholds for detecting meaningful changes
+  pub thresholds: SignificanceThresholds,
+
+  /// Oura sleep and recovery data (optional)
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub oura: Option<crate::oura::OuraContext>,
+
   /// Progression summary (computed by Rust, explains engine decisions to LLM)
   #[serde(skip_serializing_if = "Option::is_none")]
   pub progression_summary: Option<ProgressionSummary>,
+}
+
+/// Workout structure metadata (for structured workouts like TrainerRoad)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkoutStructure {
+  pub is_structured: bool,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub block_type: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub prescribed_target_watts: Option<f64>,
+}
+
+impl Default for WorkoutStructure {
+  fn default() -> Self {
+    Self {
+      is_structured: false,
+      block_type: None,
+      prescribed_target_watts: None,
+    }
+  }
 }
 
 /// Workout-specific context for the LLM
@@ -625,6 +723,236 @@ pub struct WorkoutContext {
   pub rtss: Option<f64>,
   pub zone: Option<String>,
   pub date: String,
+  pub day_of_week: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub efficiency: Option<f64>,
+  pub structure: WorkoutStructure,
+}
+
+/// Summary of a recent workout for comparison context
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecentWorkoutSummary {
+  pub date: String,
+  pub activity_type: String,
+  pub duration_min: f64,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub avg_power: Option<f64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub avg_hr: Option<i64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub pace_min_km: Option<f64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub rtss: Option<f64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub efficiency: Option<f64>,
+}
+
+/// Schedule context for day awareness
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduleContext {
+  pub today_is: String,
+  pub tomorrow_is: String,
+  pub tomorrow_expected_type: String,
+  pub weekly_pattern: WeeklyPattern,
+}
+
+/// Weekly training pattern
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WeeklyPattern {
+  pub monday: String,
+  pub tuesday: String,
+  pub wednesday: String,
+  pub thursday: String,
+  pub friday: String,
+  pub saturday: String,
+  pub sunday: String,
+}
+
+impl Default for WeeklyPattern {
+  fn default() -> Self {
+    Self {
+      monday: "ride".to_string(),
+      tuesday: "run".to_string(),
+      wednesday: "ride".to_string(),
+      thursday: "run".to_string(),
+      friday: "ride".to_string(),
+      saturday: "run_long".to_string(),
+      sunday: "rest".to_string(),
+    }
+  }
+}
+
+/// Fatigue context with TSB band and trend
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FatigueContext {
+  pub atl: Option<f64>,
+  pub ctl: Option<f64>,
+  pub tsb: Option<f64>,
+  pub tsb_band: String,
+  pub tsb_trend: String,
+}
+
+impl FatigueContext {
+  /// Build fatigue context from training context and workout history
+  pub fn from_training_context_and_workouts(
+    ctx: &TrainingContext,
+    workouts: &[WorkoutSummary],
+  ) -> Self {
+    let tsb_band = match ctx.tsb {
+      Some(tsb) if tsb > 5.0 => "fresh",
+      Some(tsb) if tsb > -10.0 => "slightly_fatigued",
+      Some(tsb) if tsb > -20.0 => "moderate_fatigue",
+      Some(_) => "high_fatigue",
+      None => "unknown",
+    };
+
+    // Compute TSB trend over last 7 days
+    let tsb_trend = Self::compute_tsb_trend(workouts, ctx.tsb);
+
+    Self {
+      atl: ctx.atl,
+      ctl: ctx.ctl,
+      tsb: ctx.tsb,
+      tsb_band: tsb_band.to_string(),
+      tsb_trend,
+    }
+  }
+
+  /// Legacy method for backward compatibility
+  pub fn from_training_context(ctx: &TrainingContext) -> Self {
+    let tsb_band = match ctx.tsb {
+      Some(tsb) if tsb > 5.0 => "fresh",
+      Some(tsb) if tsb > -10.0 => "slightly_fatigued",
+      Some(tsb) if tsb > -20.0 => "moderate_fatigue",
+      Some(_) => "high_fatigue",
+      None => "unknown",
+    };
+
+    Self {
+      atl: ctx.atl,
+      ctl: ctx.ctl,
+      tsb: ctx.tsb,
+      tsb_band: tsb_band.to_string(),
+      tsb_trend: "unknown".to_string(),
+    }
+  }
+
+  /// Compute TSB trend direction over last 7 days
+  fn compute_tsb_trend(workouts: &[WorkoutSummary], current_tsb: Option<f64>) -> String {
+    let current_tsb = match current_tsb {
+      Some(tsb) => tsb,
+      None => return "unknown".to_string(),
+    };
+
+    // Get TSB from 7 days ago by recomputing from workouts
+    // This is a simplified approach - ideally we'd store TSB history
+    let now = chrono::Utc::now();
+    let seven_days_ago = now - chrono::Duration::days(7);
+
+    // Filter workouts to 7-14 days ago (the "previous week")
+    let prev_week: Vec<_> = workouts
+      .iter()
+      .filter(|w| {
+        let days_ago = (now - w.started_at).num_days();
+        days_ago >= 7 && days_ago < 14
+      })
+      .collect();
+
+    if prev_week.is_empty() {
+      return "unknown".to_string();
+    }
+
+    // Rough approximation: compare current TSB to average rTSS from prev week
+    // This isn't perfect but gives directional sense
+    let prev_week_avg_rtss: f64 = prev_week
+      .iter()
+      .filter_map(|w| w.rtss)
+      .sum::<f64>()
+      / prev_week.len() as f64;
+
+    // If current TSB is improving (less negative), trend is up
+    // This is a simplified heuristic - proper implementation would track TSB history
+    if current_tsb > -10.0 && prev_week_avg_rtss < 40.0 {
+      "improving".to_string()
+    } else if current_tsb < -15.0 && prev_week_avg_rtss > 50.0 {
+      "declining".to_string()
+    } else {
+      "stable".to_string()
+    }
+  }
+}
+
+/// Prescription confidence based on signal quality
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrescriptionConfidence {
+  pub level: String,  // "high" | "medium" | "low"
+  pub reason: String, // Brief explanation
+}
+
+impl PrescriptionConfidence {
+  pub fn compute(
+    tsb: Option<f64>,
+    flags_count: usize,
+    adherence_pct: f64,
+    recent_workouts_count: usize,
+  ) -> Self {
+    // High confidence: clear signals, good data
+    if tsb.is_some() && flags_count <= 1 && adherence_pct > 0.8 && recent_workouts_count >= 5 {
+      return Self {
+        level: "high".to_string(),
+        reason: "Clear signals, good data".to_string(),
+      };
+    }
+
+    // Low confidence: mixed signals or sparse data
+    if tsb.is_none() || flags_count >= 3 || recent_workouts_count < 3 {
+      return Self {
+        level: "low".to_string(),
+        reason: "Mixed signals or limited data".to_string(),
+      };
+    }
+
+    // Medium: everything else
+    Self {
+      level: "medium".to_string(),
+      reason: "Some mixed indicators".to_string(),
+    }
+  }
+}
+
+/// Allowed durations for TSB-regulated dimensions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AllowedDurations {
+  pub z2_ride: DurationOptions,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DurationOptions {
+  pub short: i32,
+  pub standard: i32,
+  pub long: i32,
+  pub recommended: String,
+}
+
+impl AllowedDurations {
+  pub fn from_tsb_band(tsb_band: &str) -> Self {
+    let (recommended, short, standard, long) = match tsb_band {
+      "fresh" => ("long", 45, 60, 60),
+      "slightly_fatigued" => ("standard", 40, 45, 60),
+      "moderate_fatigue" => ("short", 40, 45, 45),
+      "high_fatigue" => ("short", 30, 40, 40),
+      _ => ("standard", 40, 45, 60),
+    };
+
+    Self {
+      z2_ride: DurationOptions {
+        short,
+        standard,
+        long,
+        recommended: recommended.to_string(),
+      },
+    }
+  }
 }
 
 /// User context for the LLM
@@ -633,6 +961,28 @@ pub struct UserContext {
   pub max_hr: Option<i64>,
   pub lthr: Option<i64>,
   pub training_days_per_week: i64,
+}
+
+/// Significance thresholds for detecting meaningful changes
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignificanceThresholds {
+  pub hr_delta_significant: i64,        // >5 beats
+  pub efficiency_delta_significant: f64, // >3%
+  pub pace_delta_significant: f64,      // >10 sec/km
+  pub power_delta_significant: f64,     // >10W
+  pub temperature_delta_significant: f64, // >5°C
+}
+
+impl Default for SignificanceThresholds {
+  fn default() -> Self {
+    Self {
+      hr_delta_significant: 5,
+      efficiency_delta_significant: 0.03,
+      pace_delta_significant: 10.0,
+      power_delta_significant: 10.0,
+      temperature_delta_significant: 5.0,
+    }
+  }
 }
 
 impl ContextPackage {
@@ -648,7 +998,29 @@ impl ContextPackage {
     training_context: TrainingContext,
     flags: TrainingFlags,
     settings: &UserSettings,
+    recent_same_type: Vec<RecentWorkoutSummary>,
+    recent_all: Vec<RecentWorkoutSummary>,
   ) -> Self {
+    // Compute fatigue context from training context
+    // TODO: Pass workouts to compute TSB trend
+    let fatigue = FatigueContext::from_training_context(&training_context);
+    let allowed_durations = AllowedDurations::from_tsb_band(&fatigue.tsb_band);
+
+    // Build schedule context
+    let schedule = Self::build_schedule(started_at);
+
+    // Determine workout structure
+    // For now: assume all rides are structured (TrainerRoad), runs are unstructured
+    let structure = if workout_type.to_lowercase() == "ride" {
+      WorkoutStructure {
+        is_structured: true,
+        block_type: Some("z2_steady".to_string()),
+        prescribed_target_watts: average_watts, // Use avg as proxy for target
+      }
+    } else {
+      WorkoutStructure::default()
+    };
+
     let workout = WorkoutContext {
       activity_type: workout_type.to_string(),
       duration_min: duration_seconds.map(|s| s as f64 / 60.0),
@@ -659,6 +1031,9 @@ impl ContextPackage {
       rtss: metrics.rtss,
       zone: metrics.hr_zone.map(|z| z.as_str().to_string()),
       date: started_at.format("%Y-%m-%d").to_string(),
+      day_of_week: started_at.format("%A").to_string(),
+      efficiency: metrics.efficiency,
+      structure,
     };
 
     let user = UserContext {
@@ -669,10 +1044,56 @@ impl ContextPackage {
 
     Self {
       workout,
-      context: training_context,
+      recent_same_type,
+      recent_all,
+      fatigue,
+      schedule,
+      allowed_durations,
       flags: flags.to_string_list(),
       user,
+      thresholds: SignificanceThresholds::default(),
+      oura: None,  // TODO: Fetch from database when Oura is connected
       progression_summary: None,
+    }
+  }
+
+  /// Build schedule context from the workout date
+  fn build_schedule(workout_date: &chrono::DateTime<chrono::Utc>) -> ScheduleContext {
+    use chrono::{Datelike, Duration, Weekday};
+
+    let today = workout_date.weekday();
+    let tomorrow = (workout_date.clone() + Duration::days(1)).weekday();
+
+    let day_name = |w: Weekday| -> String {
+      match w {
+        Weekday::Mon => "Monday",
+        Weekday::Tue => "Tuesday",
+        Weekday::Wed => "Wednesday",
+        Weekday::Thu => "Thursday",
+        Weekday::Fri => "Friday",
+        Weekday::Sat => "Saturday",
+        Weekday::Sun => "Sunday",
+      }.to_string()
+    };
+
+    // Default schedule: MWF ride, T/Th run, Sat long run, Sun rest
+    let expected_type = |w: Weekday| -> String {
+      match w {
+        Weekday::Mon => "ride",
+        Weekday::Tue => "run",
+        Weekday::Wed => "ride",
+        Weekday::Thu => "run",
+        Weekday::Fri => "ride",
+        Weekday::Sat => "run_long",
+        Weekday::Sun => "rest",
+      }.to_string()
+    };
+
+    ScheduleContext {
+      today_is: day_name(today),
+      tomorrow_is: day_name(tomorrow),
+      tomorrow_expected_type: expected_type(tomorrow),
+      weekly_pattern: WeeklyPattern::default(),
     }
   }
 

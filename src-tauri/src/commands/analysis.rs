@@ -1,9 +1,10 @@
 use crate::analysis::{
-  ContextPackage, HrZone, TrainingContext, TrainingFlags, UserSettings, WorkoutMetrics,
-  WorkoutSummary,
+  ContextPackage, HrZone, RecentWorkoutSummary, TrainingContext, TrainingFlags, UserSettings,
+  WorkoutMetrics, WorkoutSummary,
 };
-use crate::llm::{ClaudeClient, LlmError};
+use crate::llm::{ClaudeClient, LlmError, WorkoutAnalysisV4};
 use crate::db::AppState;
+use crate::progression::{load_all_dimensions, AdherenceSummary, ProgressionSummary};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::sync::Arc;
@@ -320,11 +321,11 @@ impl From<String> for AnalysisError {
   }
 }
 
-/// Result of analyzing a workout with Claude
+/// Result of analyzing a workout with Claude (V4 format)
 #[derive(Serialize)]
 pub struct WorkoutAnalysisResult {
   pub workout_id: i64,
-  pub analysis: StoredWorkoutAnalysis,
+  pub analysis: WorkoutAnalysisV4,  // V4 multi-card format
   pub input_tokens: u32,
   pub output_tokens: u32,
 }
@@ -422,16 +423,29 @@ pub async fn analyze_workout(
     .await
     .map_err(AnalysisError::from)?;
 
+  // Load progression dimensions FIRST (needed for flag computation)
+  let dimensions = load_all_dimensions(&state.db)
+    .await
+    .map_err(|e| AnalysisError::from(format!("Failed to load progression dimensions: {}", e)))?;
+
   // Get all workouts for flag computation
   let workouts_for_flags = get_workout_summaries(&state.db)
     .await
     .map_err(|e| AnalysisError::from(format!("Failed to get workout summaries: {}", e)))?;
 
-  // Compute flags
-  let flags = TrainingFlags::compute(&workouts_for_flags, &training_context, &settings);
+  // Compute flags (now dimension-aware for gap thresholds)
+  let flags = TrainingFlags::compute(&workouts_for_flags, &training_context, &settings, &dimensions);
+
+  // Fetch recent workouts for trend context
+  let recent_same_type = get_recent_same_type_workouts(&state.db, &activity_type, workout_id, 5)
+    .await
+    .unwrap_or_default();
+  let recent_all = get_recent_all_workouts(&state.db, workout_id, 7)
+    .await
+    .unwrap_or_default();
 
   // Build context package
-  let context_package = ContextPackage::build(
+  let mut context_package = ContextPackage::build(
     &activity_type,
     &started_at,
     duration_seconds,
@@ -439,17 +453,39 @@ pub async fn analyze_workout(
     average_hr,
     average_watts,
     &metrics,
-    training_context,
-    flags,
+    training_context.clone(),
+    flags.clone(),
     &settings,
+    recent_same_type,
+    recent_all,
   );
 
-  // Call Claude
-  let client = ClaudeClient::from_env()?;
-  let (analysis, usage) = client.analyze_workout(&context_package.to_json()).await?;
+  // Compute adherence from recent workout data
+  let adherence = compute_adherence(&state.db, &settings).await
+    .unwrap_or_default();
 
-  // Store the analysis
-  let risk_flags_json = serde_json::to_string(&analysis.risk_flags).unwrap_or_default();
+  // Compute progression summary
+  let progression_summary = ProgressionSummary::compute(
+    &dimensions,
+    &training_context,
+    &flags,
+    adherence,
+  );
+
+  // Attach progression summary to context package
+  context_package = context_package.with_progression_summary(progression_summary);
+
+  // Call Claude (V4 format)
+  let client = ClaudeClient::from_env()?;
+  let context_json = context_package.to_json();
+  println!("=== CONTEXT PACKAGE ===\n{}\n=== END CONTEXT ===", context_json);
+  let (v4_analysis, usage) = client.analyze_workout_v4_or_fallback(&context_json).await?;
+
+  // Convert V4 to legacy for DB storage (backward compatibility)
+  let legacy_analysis: crate::llm::WorkoutAnalysis = v4_analysis.clone().into();
+
+  // Store the legacy analysis in DB
+  let risk_flags_json = serde_json::to_string(&legacy_analysis.risk_flags).unwrap_or_default();
 
   sqlx::query(
     r#"
@@ -470,11 +506,11 @@ pub async fn analyze_workout(
     "#,
   )
   .bind(workout_id)
-  .bind(&analysis.summary)
-  .bind(&analysis.tomorrow_recommendation)
+  .bind(&legacy_analysis.summary)
+  .bind(&legacy_analysis.tomorrow_recommendation)
   .bind(&risk_flags_json)
-  .bind(&analysis.goal_notes)
-  .bind("claude-sonnet-4-20250514")
+  .bind(&legacy_analysis.goal_notes)
+  .bind("claude-sonnet-4-20250514-v4")
   .bind(usage.input_tokens as i64)
   .bind(usage.output_tokens as i64)
   .execute(&state.db)
@@ -486,17 +522,10 @@ pub async fn analyze_workout(
     workout_id, usage.input_tokens, usage.output_tokens
   );
 
+  // Return V4 format to frontend
   Ok(WorkoutAnalysisResult {
     workout_id,
-    analysis: StoredWorkoutAnalysis {
-      id: None,
-      workout_id,
-      summary: analysis.summary,
-      tomorrow_recommendation: analysis.tomorrow_recommendation,
-      risk_flags: analysis.risk_flags,
-      goal_notes: analysis.goal_notes,
-      created_at: None,
-    },
+    analysis: v4_analysis,
     input_tokens: usage.input_tokens,
     output_tokens: usage.output_tokens,
   })
@@ -630,4 +659,178 @@ async fn get_workout_summaries(
     .collect();
 
   Ok(workouts)
+}
+
+/// ---------------------------------------------------------------------------
+/// Recent Workouts for Trend Context
+/// ---------------------------------------------------------------------------
+
+/// Get recent workouts of the same type for trend comparison
+/// Excludes the current workout being analyzed
+async fn get_recent_same_type_workouts(
+  db: &crate::db::DbPool,
+  activity_type: &str,
+  exclude_workout_id: i64,
+  limit: i32,
+) -> Result<Vec<RecentWorkoutSummary>, String> {
+  let rows: Vec<(
+    String, String, Option<i64>, Option<f64>, Option<i64>,
+    Option<f64>, Option<f64>, Option<f64>,
+  )> = sqlx::query_as(
+    r#"
+    SELECT
+      started_at,
+      activity_type,
+      duration_seconds,
+      CAST(average_watts AS REAL),
+      average_heartrate,
+      CAST(pace_min_per_km AS REAL),
+      CAST(rtss AS REAL),
+      CAST(efficiency AS REAL)
+    FROM workouts
+    WHERE activity_type = ?1 AND id != ?2
+    ORDER BY started_at DESC
+    LIMIT ?3
+    "#,
+  )
+  .bind(activity_type)
+  .bind(exclude_workout_id)
+  .bind(limit)
+  .fetch_all(db)
+  .await
+  .map_err(|e| format!("Failed to fetch recent same-type workouts: {}", e))?;
+
+  let workouts = rows
+    .into_iter()
+    .filter_map(|(started_at, activity_type, duration_secs, watts, hr, pace, rtss, efficiency)| {
+      let dt = DateTime::parse_from_rfc3339(&started_at)
+        .or_else(|_| DateTime::parse_from_str(&started_at, "%Y-%m-%dT%H:%M:%SZ"))
+        .ok()?;
+
+      let duration_min = duration_secs.map(|s| s as f64 / 60.0).unwrap_or(0.0);
+
+      Some(RecentWorkoutSummary {
+        date: dt.format("%Y-%m-%d").to_string(),
+        activity_type,
+        duration_min,
+        avg_power: watts,
+        avg_hr: hr,
+        pace_min_km: pace,
+        rtss,
+        efficiency,
+      })
+    })
+    .collect();
+
+  Ok(workouts)
+}
+
+/// Get recent workouts of any type for weekly context
+/// Excludes the current workout being analyzed
+async fn get_recent_all_workouts(
+  db: &crate::db::DbPool,
+  exclude_workout_id: i64,
+  limit: i32,
+) -> Result<Vec<RecentWorkoutSummary>, String> {
+  let rows: Vec<(
+    String, String, Option<i64>, Option<f64>, Option<i64>,
+    Option<f64>, Option<f64>, Option<f64>,
+  )> = sqlx::query_as(
+    r#"
+    SELECT
+      started_at,
+      activity_type,
+      duration_seconds,
+      CAST(average_watts AS REAL),
+      average_heartrate,
+      CAST(pace_min_per_km AS REAL),
+      CAST(rtss AS REAL),
+      CAST(efficiency AS REAL)
+    FROM workouts
+    WHERE id != ?1
+    ORDER BY started_at DESC
+    LIMIT ?2
+    "#,
+  )
+  .bind(exclude_workout_id)
+  .bind(limit)
+  .fetch_all(db)
+  .await
+  .map_err(|e| format!("Failed to fetch recent all workouts: {}", e))?;
+
+  let workouts = rows
+    .into_iter()
+    .filter_map(|(started_at, activity_type, duration_secs, watts, hr, pace, rtss, efficiency)| {
+      let dt = DateTime::parse_from_rfc3339(&started_at)
+        .or_else(|_| DateTime::parse_from_str(&started_at, "%Y-%m-%dT%H:%M:%SZ"))
+        .ok()?;
+
+      let duration_min = duration_secs.map(|s| s as f64 / 60.0).unwrap_or(0.0);
+
+      Some(RecentWorkoutSummary {
+        date: dt.format("%Y-%m-%d").to_string(),
+        activity_type,
+        duration_min,
+        avg_power: watts,
+        avg_hr: hr,
+        pace_min_km: pace,
+        rtss,
+        efficiency,
+      })
+    })
+    .collect();
+
+  Ok(workouts)
+}
+
+/// ---------------------------------------------------------------------------
+/// Adherence Computation
+/// ---------------------------------------------------------------------------
+
+/// Compute adherence summary from workout history
+///
+/// This calculates how well the athlete has been hitting their expected workouts
+/// over the current week, which affects progression decisions.
+async fn compute_adherence(
+  db: &crate::db::DbPool,
+  settings: &UserSettings,
+) -> Result<AdherenceSummary, String> {
+  // Get workouts from current week (last 7 days)
+  let rows: Vec<(String, Option<i64>)> = sqlx::query_as(
+    r#"
+    SELECT activity_type, duration_seconds
+    FROM workouts
+    WHERE started_at >= datetime('now', '-7 days')
+    ORDER BY started_at DESC
+    "#,
+  )
+  .fetch_all(db)
+  .await
+  .map_err(|e| format!("Failed to fetch workouts for adherence: {}", e))?;
+
+  let total_completed = rows.len() as u8;
+  let total_expected = settings.training_days_per_week as u8;
+
+  // Key sessions: count long runs (>45 min) as key sessions
+  // For now, we expect 1 long run per week as a key session
+  let key_expected = 1u8;
+  let key_completed = rows
+    .iter()
+    .filter(|(activity_type, duration)| {
+      activity_type.to_lowercase() == "run"
+        && duration.map_or(false, |d| d > 45 * 60) // > 45 min
+    })
+    .count() as u8;
+
+  // Check for consecutive low adherence weeks (simplified - just current week for now)
+  // TODO: Track this properly in the database
+  let consecutive_low_weeks = 0u8;
+
+  Ok(AdherenceSummary::compute(
+    total_expected,
+    total_completed,
+    key_expected,
+    key_completed,
+    consecutive_low_weeks,
+  ))
 }
