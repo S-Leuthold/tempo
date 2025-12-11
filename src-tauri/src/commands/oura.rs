@@ -158,3 +158,200 @@ pub async fn oura_refresh_auth(state: State<'_, Arc<AppState>>) -> Result<(), St
   println!("Oura tokens refreshed");
   Ok(())
 }
+
+/// ---------------------------------------------------------------------------
+/// Database Helpers for Oura Data
+/// ---------------------------------------------------------------------------
+
+async fn save_sleep_data(
+  db: &crate::db::DbPool,
+  date: &str,
+  sleep_data: &crate::oura::DailySleepData,
+) -> Result<(), String> {
+  let contributors = &sleep_data.contributors;
+
+  sqlx::query(
+    r#"
+    INSERT INTO oura_sleep (
+      date, total_sleep_seconds, deep_sleep_seconds,
+      rem_sleep_seconds, light_sleep_seconds, efficiency_pct
+    )
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+    ON CONFLICT(date) DO UPDATE SET
+      total_sleep_seconds = excluded.total_sleep_seconds,
+      deep_sleep_seconds = excluded.deep_sleep_seconds,
+      rem_sleep_seconds = excluded.rem_sleep_seconds,
+      light_sleep_seconds = excluded.light_sleep_seconds,
+      efficiency_pct = excluded.efficiency_pct
+    "#,
+  )
+  .bind(date)
+  .bind(contributors.total_sleep)
+  .bind(contributors.deep_sleep)
+  .bind(contributors.rem_sleep)
+  .bind(contributors.light_sleep)
+  .bind(contributors.sleep_efficiency)
+  .execute(db)
+  .await
+  .map_err(|e| format!("Failed to save sleep data: {}", e))?;
+
+  Ok(())
+}
+
+async fn save_hrv_data(
+  db: &crate::db::DbPool,
+  date: &str,
+  hrv_ms: f64,
+) -> Result<(), String> {
+  sqlx::query(
+    r#"
+    INSERT INTO oura_hrv (date, average_hrv_ms)
+    VALUES (?1, ?2)
+    ON CONFLICT(date) DO UPDATE SET
+      average_hrv_ms = excluded.average_hrv_ms
+    "#,
+  )
+  .bind(date)
+  .bind(hrv_ms)
+  .execute(db)
+  .await
+  .map_err(|e| format!("Failed to save HRV data: {}", e))?;
+
+  Ok(())
+}
+
+async fn save_resting_hr_data(
+  db: &crate::db::DbPool,
+  date: &str,
+  resting_hr: i64,
+) -> Result<(), String> {
+  sqlx::query(
+    r#"
+    INSERT INTO oura_resting_hr (date, resting_hr)
+    VALUES (?1, ?2)
+    ON CONFLICT(date) DO UPDATE SET
+      resting_hr = excluded.resting_hr
+    "#,
+  )
+  .bind(date)
+  .bind(resting_hr)
+  .execute(db)
+  .await
+  .map_err(|e| format!("Failed to save resting HR data: {}", e))?;
+
+  Ok(())
+}
+
+/// ---------------------------------------------------------------------------
+/// Oura Data Sync Command
+/// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+pub struct OuraSyncResult {
+  pub sleep_records: usize,
+  pub hrv_records: usize,
+  pub resting_hr_records: usize,
+}
+
+#[tauri::command]
+pub async fn oura_sync_data(
+  state: State<'_, Arc<AppState>>,
+) -> Result<OuraSyncResult, String> {
+  use crate::oura::{fetch_daily_readiness, fetch_daily_sleep, fetch_sleep_periods, OuraConfig};
+  use chrono::Local;
+
+  let config = OuraConfig::from_env().map_err(|e| e.to_string())?;
+
+  // Load tokens from database
+  let mut tokens = load_tokens(&state.db)
+    .await?
+    .ok_or_else(|| "Not connected to Oura".to_string())?;
+
+  // Refresh tokens if needed
+  if tokens.needs_refresh() {
+    tokens = crate::oura::refresh_tokens(&config, &tokens.refresh_token)
+      .await
+      .map_err(|e| e.to_string())?;
+    save_tokens(&state.db, &tokens).await?;
+  }
+
+  // Calculate date range (last 7 days)
+  let end_date = Local::now().naive_local().date();
+  let start_date = end_date - chrono::Duration::days(7);
+  let start_str = start_date.format("%Y-%m-%d").to_string();
+  let end_str = end_date.format("%Y-%m-%d").to_string();
+
+  println!("Syncing Oura data from {} to {}", start_str, end_str);
+
+  let mut sleep_count = 0;
+  let mut hrv_count = 0;
+  let mut resting_hr_count = 0;
+
+  // Fetch daily sleep data
+  match fetch_daily_sleep(&tokens.access_token, &start_str, &end_str).await {
+    Ok(response) => {
+      for sleep_data in response.data {
+        save_sleep_data(&state.db, &sleep_data.day, &sleep_data).await?;
+        sleep_count += 1;
+      }
+      println!("Saved {} sleep records", sleep_count);
+    }
+    Err(e) => {
+      eprintln!("Failed to fetch sleep data: {}", e);
+    }
+  }
+
+  // Fetch sleep periods for HRV data
+  match fetch_sleep_periods(&tokens.access_token, &start_str, &end_str).await {
+    Ok(response) => {
+      // Group periods by date and average HRV for each day
+      let mut hrv_by_date: std::collections::HashMap<String, Vec<f64>> =
+        std::collections::HashMap::new();
+
+      for period in response.data {
+        if let Some(hrv) = period.average_hrv {
+          // Extract date from bedtime_start (ISO timestamp)
+          if let Ok(bedtime) = chrono::DateTime::parse_from_rfc3339(&period.bedtime_start) {
+            let date = bedtime.date_naive().format("%Y-%m-%d").to_string();
+            hrv_by_date.entry(date).or_insert_with(Vec::new).push(hrv);
+          }
+        }
+      }
+
+      // Save average HRV for each date
+      for (date, hrv_values) in hrv_by_date {
+        if !hrv_values.is_empty() {
+          let avg_hrv = hrv_values.iter().sum::<f64>() / hrv_values.len() as f64;
+          save_hrv_data(&state.db, &date, avg_hrv).await?;
+          hrv_count += 1;
+        }
+      }
+      println!("Saved {} HRV records", hrv_count);
+    }
+    Err(e) => {
+      eprintln!("Failed to fetch HRV data: {}", e);
+    }
+  }
+
+  // Fetch daily readiness for resting HR
+  match fetch_daily_readiness(&tokens.access_token, &start_str, &end_str).await {
+    Ok(response) => {
+      for readiness_data in response.data {
+        if let Some(resting_hr) = readiness_data.contributors.resting_heart_rate {
+          save_resting_hr_data(&state.db, &readiness_data.day, resting_hr).await?;
+          resting_hr_count += 1;
+        }
+      }
+      println!("Saved {} resting HR records", resting_hr_count);
+    }
+    Err(e) => {
+      eprintln!("Failed to fetch resting HR data: {}", e);
+    }
+  }
+
+  Ok(OuraSyncResult {
+    sleep_records: sleep_count,
+    hrv_records: hrv_count,
+    resting_hr_records: resting_hr_count,
+  })
+}

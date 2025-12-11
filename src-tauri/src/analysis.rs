@@ -794,6 +794,7 @@ pub struct FatigueContext {
 
 impl FatigueContext {
   /// Build fatigue context from training context and workout history
+  #[allow(dead_code)]
   pub fn from_training_context_and_workouts(
     ctx: &TrainingContext,
     workouts: &[WorkoutSummary],
@@ -838,6 +839,7 @@ impl FatigueContext {
   }
 
   /// Compute TSB trend direction over last 7 days
+  #[allow(dead_code)]
   fn compute_tsb_trend(workouts: &[WorkoutSummary], current_tsb: Option<f64>) -> String {
     let current_tsb = match current_tsb {
       Some(tsb) => tsb,
@@ -847,7 +849,6 @@ impl FatigueContext {
     // Get TSB from 7 days ago by recomputing from workouts
     // This is a simplified approach - ideally we'd store TSB history
     let now = chrono::Utc::now();
-    let seven_days_ago = now - chrono::Duration::days(7);
 
     // Filter workouts to 7-14 days ago (the "previous week")
     let prev_week: Vec<_> = workouts
@@ -883,6 +884,7 @@ impl FatigueContext {
 }
 
 /// Prescription confidence based on signal quality
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrescriptionConfidence {
   pub level: String,  // "high" | "medium" | "low"
@@ -890,6 +892,7 @@ pub struct PrescriptionConfidence {
 }
 
 impl PrescriptionConfidence {
+  #[allow(dead_code)]
   pub fn compute(
     tsb: Option<f64>,
     flags_count: usize,
