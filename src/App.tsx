@@ -11,6 +11,12 @@ interface StravaAuthStatus {
   needs_refresh: boolean;
 }
 
+interface OuraAuthStatus {
+  is_authenticated: boolean;
+  expires_at: string | null;
+  needs_refresh: boolean;
+}
+
 interface SyncResult {
   new_activities: number;
   total_fetched: number;
@@ -100,7 +106,9 @@ interface AnalysisResult {
 
 function App() {
   const [stravaStatus, setStravaStatus] = useState<StravaAuthStatus | null>(null);
+  const [ouraStatus, setOuraStatus] = useState<OuraAuthStatus | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [isConnectingOura, setIsConnectingOura] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isComputing, setIsComputing] = useState(false);
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
@@ -119,6 +127,7 @@ function App() {
 
   useEffect(() => {
     checkStravaStatus();
+    checkOuraStatus();
     loadWorkouts();
     loadSettings();
     loadTrainingContext();
@@ -229,6 +238,39 @@ function App() {
       await checkStravaStatus();
     } catch (e) {
       setError(`Disconnect failed: ${e}`);
+    }
+  }
+
+  async function checkOuraStatus() {
+    try {
+      const status = await invoke<OuraAuthStatus>("oura_get_auth_status");
+      setOuraStatus(status);
+    } catch (e) {
+      console.error("Failed to check Oura status:", e);
+    }
+  }
+
+  async function connectOura() {
+    setIsConnectingOura(true);
+    setError(null);
+    try {
+      const authUrl = await invoke<string>("oura_start_auth");
+      await openUrl(authUrl);
+      await invoke("oura_complete_auth");
+      await checkOuraStatus();
+    } catch (e) {
+      setError(`Oura connection failed: ${e}`);
+    } finally {
+      setIsConnectingOura(false);
+    }
+  }
+
+  async function disconnectOura() {
+    try {
+      await invoke("oura_disconnect");
+      await checkOuraStatus();
+    } catch (e) {
+      setError(`Failed to disconnect Oura: ${e}`);
     }
   }
 
@@ -382,6 +424,29 @@ function App() {
         )}
 
         {error && <p className="error">{error}</p>}
+      </div>
+
+      {/* Oura Connection Card */}
+      <div className="card">
+        <h2>Oura Connection</h2>
+
+        {ouraStatus === null ? (
+          <p>Loading...</p>
+        ) : ouraStatus.is_authenticated ? (
+          <div>
+            <p className="status connected">Connected</p>
+            <button onClick={disconnectOura} className="secondary">
+              Disconnect
+            </button>
+          </div>
+        ) : (
+          <div>
+            <p className="status disconnected">Not connected</p>
+            <button onClick={connectOura} disabled={isConnectingOura}>
+              {isConnectingOura ? "Connecting..." : "Connect Oura"}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Training Load Card */}
