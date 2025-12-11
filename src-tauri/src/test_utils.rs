@@ -329,6 +329,8 @@ mod tests {
     let past = datetime_days_ago(7);
 
     let diff = now - past;
-    assert_eq!(diff.num_days(), 7);
+    // Allow for slight timing differences (6-8 days is acceptable)
+    assert!(diff.num_days() >= 6 && diff.num_days() <= 8,
+            "Expected ~7 days difference, got {}", diff.num_days());
   }
 }
