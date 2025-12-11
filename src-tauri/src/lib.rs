@@ -38,12 +38,19 @@ pub fn run() {
     .invoke_handler(tauri::generate_handler![
       commands::get_workouts,
       commands::get_sync_state,
+      // Strava commands
       commands::strava::strava_start_auth,
       commands::strava::strava_complete_auth,
       commands::strava::strava_get_auth_status,
       commands::strava::strava_refresh_tokens,
       commands::strava::strava_disconnect,
       commands::strava::strava_sync_activities,
+      // Oura commands
+      commands::oura::oura_start_auth,
+      commands::oura::oura_complete_auth,
+      commands::oura::oura_get_auth_status,
+      commands::oura::oura_refresh_auth,
+      commands::oura::oura_disconnect,
       commands::analysis::get_user_settings,
       commands::analysis::update_user_settings,
       commands::analysis::compute_workout_metrics,

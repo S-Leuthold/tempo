@@ -1,6 +1,7 @@
 pub mod analysis;
 pub mod progression;
 pub mod strava;
+pub mod oura;
 
 use crate::db::AppState;
 use crate::models::{Workout, SyncState};
