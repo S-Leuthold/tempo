@@ -5,6 +5,7 @@ mod models;
 mod commands;
 mod progression;
 mod strava;
+mod oura;
 
 use db::AppState;
 use std::sync::Arc;

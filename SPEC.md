@@ -375,26 +375,60 @@ The progression engine is the authoritative source for training decisions. The L
 
 1. **Rust as source of truth** - All progression logic lives in deterministic Rust code
 2. **LLM as narrator only** - Claude explains decisions, never makes them
-3. **Multi-dimensional tracking** - Separate progression for run intervals, long runs, and Z2 rides
-4. **No-overlap rule** - Only one dimension can progress within 7 days
-5. **Plan gates** - Each week specifies what's allowed to progress
+3. **Ceiling-based, not calendar-based** - Progress when criteria met, not when calendar says so
+4. **Ceilings prevent runaway progression** - "Enough for your goal" not "max possible"
+5. **Dimension-agnostic schema** - Add new dimensions without migrations
+6. **No-overlap rule** - Only one dimension can progress within 7 days
 
-### Training Phases (12-week Kilimanjaro Prep)
+### Ceiling-Based Model
 
-| Phase | Weeks | Focus |
-|-------|-------|-------|
-| Foundation | 1-4 | Build aerobic base, establish habits |
-| Expansion | 5-8 | Extend durations, progress intervals |
-| Consolidation | 9-12 | Add quality, maintain volume |
+Each progression dimension has:
+- **current_value**: Where the athlete is now
+- **ceiling_value**: Maximum target (goal-appropriate, not infinite)
+- **lifecycle_status**: `building` → `at_ceiling` → `regressing`
+
+When you hit the ceiling, you maintain—not escalate.
+
+### Lifecycle States
+
+| State | Meaning | Engine Behavior |
+|-------|---------|-----------------|
+| `building` | current < ceiling | Progress when criteria met |
+| `at_ceiling` | current == ceiling | Maintenance mode, track last touch |
+| `regressing` | Detraining detected | Step back, return to building |
 
 ### Progression Dimensions
 
 ```sql
--- progression_state tracks current level in each dimension
-run_interval_current TEXT    -- '4:1', '5:1', ..., 'continuous_30'
-long_run_current_min INTEGER -- 30, 35, 40, ...
-z2_ride_current_min INTEGER  -- 45, 50, 55, ...
+CREATE TABLE progression_dimensions (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,        -- 'run_interval', 'long_run', 'z2_ride'
+    current_value TEXT NOT NULL,      -- '5:1' or '40' (stored as text)
+    ceiling_value TEXT NOT NULL,      -- 'continuous_45' or '90'
+    step_config_json TEXT NOT NULL,   -- {"type": "sequence", ...} or {"type": "increment", ...}
+    status TEXT NOT NULL,             -- 'building', 'at_ceiling', 'regressing'
+    last_change_at DATETIME,
+    last_ceiling_touch_at DATETIME,   -- For maintenance tracking
+    maintenance_cadence_days INTEGER  -- How often to touch ceiling
+);
 ```
+
+**Step Configuration Types:**
+- `sequence`: Ordered list of values (run intervals: 4:1 → 5:1 → ... → continuous_45)
+- `increment`: Fixed step size (long run: +5 min toward 90 min ceiling)
+- `regulated`: TSB-based, not progressive (Z2 rides)
+
+### Cycling Is Different
+
+Cycling duration is **regulated by TSB**, not progressive:
+
+| TSB Range | Duration | Rationale |
+|-----------|----------|-----------|
+| ≥ 0 (fresh) | 60 min Z2 | Can handle longer session |
+| -10 to 0 (moderate) | 45 min Z2 | Standard training load |
+| < -10 (fatigued) | 30-40 min recovery | Protect running/lifting recovery |
+
+Power drifts up naturally as fitness improves. Time stays stable. This protects running and lifting recovery for hybrid athletes.
 
 ### Engine Decisions
 
@@ -402,12 +436,33 @@ The engine outputs one of these decisions per dimension:
 
 | Decision | Meaning |
 |----------|---------|
-| `progress_allowed` | All criteria met, recommend the progression |
-| `hold_for_now` | Criteria met but blocked (plan gate or overlap rule) |
+| `progress_allowed` | Criteria met, can advance to next value |
+| `at_ceiling` | At maximum, maintenance mode |
+| `maintenance_due` | At ceiling but need to touch it soon (14+ days) |
+| `hold_for_now` | Criteria met but blocked by overlap rule (7-day spacing) |
 | `hold_due_to_unstable_week` | Week had <70% adherence |
-| `hold_due_to_missed_key_session` | Key session missed (e.g., long run) |
-| `hold` | Criteria not met |
-| `regress` | Step back (consecutive low-adherence weeks) |
+| `hold_due_to_missed_key_session` | Key session was missed |
+| `hold` | Criteria not met (fatigue, volume instability) |
+| `regress` | Step back due to detraining (21+ days without ceiling touch) |
+| `regulated` | Cycling dimension - duration set by TSB, no progression |
+
+### Maintenance & Regression
+
+When `status = 'at_ceiling'`:
+- Track `last_ceiling_touch_at` for maintenance cadence
+- Long run: touch ceiling every 14 days
+- Z2 ride: touch ceiling every 10 days
+- Run intervals: touch ceiling every 7 days
+
+If ceiling not touched for 21+ days: engine recommends `regress` to prevent detraining.
+
+### Ceiling Defaults (Kilimanjaro Prep)
+
+| Dimension | Ceiling | Rationale |
+|-----------|---------|-----------|
+| run_interval | continuous_45 | Strong aerobic base, not marathon-specific |
+| long_run | 90 min | Kili-ready without excessive joint stress |
+| z2_ride | 60 min | Regulated, not progressive |
 
 ### Adherence Tracking
 
@@ -415,12 +470,12 @@ Missing a workout is a load signal, not a moral failure. The engine handles this
 
 ```rust
 struct AdherenceSummary {
-    total_expected: u8,      // Expected workouts this week
-    total_completed: u8,     // Completed workouts
-    key_expected: u8,        // Key sessions (e.g., long run, intervals)
-    key_completed: u8,       // Key sessions completed
-    adherence_pct: f32,      // Completion percentage
-    week_stable: bool,       // >= 75% adherence AND all key sessions done
+    total_expected: u8,       // Expected workouts this week
+    total_completed: u8,      // Completed workouts
+    key_expected: u8,         // Key sessions (e.g., long run, intervals)
+    key_completed: u8,        // Key sessions completed
+    adherence_pct: f32,       // Completion percentage
+    week_stable: bool,        // >= 70% adherence AND all key sessions done
     consecutive_low_weeks: u8 // For regression detection
 }
 ```
@@ -429,7 +484,7 @@ struct AdherenceSummary {
 1. **Single missed non-key workout:** Progression may still be allowed if `week_stable`
 2. **Missed key session:** Hard block on that dimension's progression
 3. **<70% adherence:** Unstable week, all dimensions blocked
-4. **2+ consecutive low weeks:** Consider regression
+4. **21+ days without ceiling touch:** Regression recommended
 
 **No compensatory volume.** No "make-up" sessions. No guilt.
 
@@ -446,12 +501,16 @@ struct AdherenceSummary {
 - [ ] Simple menubar dropdown showing latest analysis
 
 ### v0.2 - Progression Engine
-- [x] 12-week structured plan schema
-- [x] Multi-dimensional progression tracking
+- [x] Ceiling-based progression model (replaces week-based plan)
+- [x] Multi-dimensional tracking (run intervals, long runs, Z2 rides)
+- [x] Lifecycle states (building → at_ceiling → regressing)
+- [x] Regulated cycling (TSB-based duration, not progressive)
 - [x] Adherence tracking with deterministic rules
-- [x] Engine decisions (progress/hold/regress)
-- [x] Updated coach prompt for engine interpretation
-- [ ] Wire progression engine to workout logging
+- [x] Engine decisions (progress/hold/regress/regulated)
+- [x] Maintenance cadence & regression detection
+- [x] Updated coach prompt for ceiling model
+- [x] Tauri commands for progression queries
+- [x] Wire progression engine to workout analysis
 - [ ] Frontend display of progression status
 
 ### v0.3 - Full Daily Flow
