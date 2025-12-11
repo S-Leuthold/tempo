@@ -41,6 +41,7 @@ impl StravaConfig {
 }
 
 /// Response from Strava token endpoint
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct TokenResponse {
   pub access_token: String,
@@ -51,6 +52,7 @@ pub struct TokenResponse {
 }
 
 /// Basic athlete info returned with tokens
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct AthleteInfo {
   pub id: i64,
@@ -362,6 +364,7 @@ pub struct StravaActivity {
 /// ---------------------------------------------------------------------------
 
 /// Raw stream data from Strava API (array format)
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct StravaStream {
   #[serde(rename = "type")]

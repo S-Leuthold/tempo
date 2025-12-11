@@ -22,6 +22,12 @@ interface SyncResult {
   total_fetched: number;
 }
 
+interface OuraSyncResult {
+  sleep_records: number;
+  hrv_records: number;
+  resting_hr_records: number;
+}
+
 interface ComputeResult {
   total: number;
   computed: number;
@@ -110,6 +116,8 @@ function App() {
   const [isConnecting, setIsConnecting] = useState(false);
   const [isConnectingOura, setIsConnectingOura] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isSyncingOura, setIsSyncingOura] = useState(false);
+  const [ouraSyncResult, setOuraSyncResult] = useState<OuraSyncResult | null>(null);
   const [isComputing, setIsComputing] = useState(false);
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
   const [computeResult, setComputeResult] = useState<ComputeResult | null>(null);
@@ -274,6 +282,21 @@ function App() {
     }
   }
 
+  async function syncOuraData() {
+    setIsSyncingOura(true);
+    setError(null);
+    setOuraSyncResult(null);
+
+    try {
+      const result = await invoke<OuraSyncResult>("oura_sync_data");
+      setOuraSyncResult(result);
+    } catch (e) {
+      setError(`Oura sync failed: ${e}`);
+    } finally {
+      setIsSyncingOura(false);
+    }
+  }
+
   async function syncActivities() {
     setIsSyncing(true);
     setError(null);
@@ -435,9 +458,19 @@ function App() {
         ) : ouraStatus.is_authenticated ? (
           <div>
             <p className="status connected">Connected</p>
-            <button onClick={disconnectOura} className="secondary">
-              Disconnect
-            </button>
+            <div className="button-row">
+              <button onClick={syncOuraData} disabled={isSyncingOura}>
+                {isSyncingOura ? "Syncing..." : "Sync Oura Data"}
+              </button>
+              <button onClick={disconnectOura} className="secondary">
+                Disconnect
+              </button>
+            </div>
+            {ouraSyncResult && (
+              <p className="sync-result">
+                Synced {ouraSyncResult.sleep_records} sleep, {ouraSyncResult.hrv_records} HRV, {ouraSyncResult.resting_hr_records} resting HR records
+              </p>
+            )}
           </div>
         ) : (
           <div>

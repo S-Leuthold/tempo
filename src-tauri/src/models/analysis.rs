@@ -1,6 +1,7 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct WorkoutAnalysis {
   pub id: i64,
@@ -14,6 +15,7 @@ pub struct WorkoutAnalysis {
   pub created_at: Option<DateTime<Utc>>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewWorkoutAnalysis {
   pub workout_id: i64,
@@ -25,6 +27,7 @@ pub struct NewWorkoutAnalysis {
   pub prompt_hash: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct WeeklySummary {
   pub id: i64,
@@ -49,6 +52,7 @@ pub struct SyncState {
   pub token_expires_at: Option<DateTime<Utc>>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Goal {
   pub id: i64,
@@ -58,6 +62,7 @@ pub struct Goal {
   pub active: Option<bool>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewGoal {
   pub name: String,

@@ -629,6 +629,7 @@ impl ProgressionSummary {
     }
 
     /// Get status for a specific dimension by name
+    #[allow(dead_code)]
     pub fn get_dimension(&self, name: &str) -> Option<&DimensionStatus> {
         self.dimensions.iter().find(|d| d.name == name)
     }

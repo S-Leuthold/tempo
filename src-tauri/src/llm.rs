@@ -454,6 +454,7 @@ impl ClaudeClient {
   }
 
   /// Analyze a workout with structured JSON output (returns legacy format for DB storage)
+  #[allow(dead_code)]
   pub async fn analyze_workout(
     &self,
     context_json: &str,
@@ -512,6 +513,7 @@ Respond with valid JSON matching the V4 OUTPUT STRUCTURE."#,
   }
 
   /// Analyze a workout with V3 format (trend-focused with structured prescription)
+  #[allow(dead_code)]
   async fn analyze_workout_v3(
     &self,
     context_json: &str,
@@ -540,6 +542,7 @@ Respond with valid JSON matching the OUTPUT STRUCTURE specified in your instruct
   }
 
   /// Analyze a workout with the V2 format (deep analysis)
+  #[allow(dead_code)]
   async fn analyze_workout_v2(
     &self,
     context_json: &str,
@@ -568,6 +571,7 @@ Respond with valid JSON matching the OUTPUT FORMAT specified in your instruction
   }
 
   /// Legacy analysis format (simpler, backward compatible)
+  #[allow(dead_code)]
   async fn analyze_workout_legacy(
     &self,
     context_json: &str,

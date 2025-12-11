@@ -44,6 +44,7 @@ impl OuraConfig {
 }
 
 /// Response from Oura token endpoint
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct TokenResponse {
   pub access_token: String,
@@ -169,6 +170,7 @@ impl Default for OuraContext {
 
 impl OuraContext {
   /// Check if any Oura data is present
+  #[allow(dead_code)]
   pub fn has_data(&self) -> bool {
     self.sleep_duration_hours.is_some()
       || self.hrv_last_night.is_some()
@@ -176,6 +178,7 @@ impl OuraContext {
   }
 
   /// Compute sleep debt (hours below 8hr target over last 7 days)
+  #[allow(dead_code)]
   pub fn compute_sleep_debt(sleep_avg_7d: Option<f64>) -> Option<f64> {
     sleep_avg_7d.and_then(|avg| {
       let target = 8.0;
@@ -189,6 +192,7 @@ impl OuraContext {
   }
 
   /// Determine HRV trend direction from recent data
+  #[allow(dead_code)]
   pub fn determine_hrv_trend(hrv_current: Option<f64>, hrv_avg: Option<f64>) -> Option<String> {
     match (hrv_current, hrv_avg) {
       (Some(current), Some(avg)) => {
@@ -209,11 +213,13 @@ impl OuraContext {
 
   /// Count consecutive days HRV has declined
   /// TODO: Implement when we have daily HRV history
+  #[allow(dead_code)]
   pub fn count_hrv_declining_days() -> Option<u8> {
     None  // Placeholder
   }
 
   /// Determine resting HR trend
+  #[allow(dead_code)]
   pub fn determine_resting_hr_trend(
     current: Option<i64>,
     avg: Option<i64>,
@@ -379,4 +385,154 @@ pub fn wait_for_callback() -> Result<CallbackResult, String> {
   println!("Received authorization code");
 
   Ok(CallbackResult { code })
+}
+
+/// ---------------------------------------------------------------------------
+/// Oura API Data Structures
+/// ---------------------------------------------------------------------------
+
+/// Daily sleep response from Oura API v2
+#[derive(Debug, Deserialize)]
+pub struct DailySleepResponse {
+  pub data: Vec<DailySleepData>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DailySleepData {
+  pub day: String,  // ISO date (YYYY-MM-DD)
+  pub contributors: SleepContributors,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SleepContributors {
+  pub deep_sleep: Option<i64>,       // seconds
+  pub rem_sleep: Option<i64>,        // seconds
+  pub light_sleep: Option<i64>,      // seconds
+  pub total_sleep: Option<i64>,      // seconds
+  pub sleep_efficiency: Option<i64>, // percentage (0-100)
+}
+
+/// Sleep periods response (contains HRV data)
+#[derive(Debug, Deserialize)]
+pub struct SleepPeriodsResponse {
+  pub data: Vec<SleepPeriod>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+pub struct SleepPeriod {
+  pub bedtime_start: String,  // ISO timestamp
+  pub bedtime_end: String,    // ISO timestamp
+  pub average_hrv: Option<f64>, // HRV in milliseconds
+}
+
+/// Daily readiness response (contains resting HR)
+#[derive(Debug, Deserialize)]
+pub struct DailyReadinessResponse {
+  pub data: Vec<DailyReadinessData>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DailyReadinessData {
+  pub day: String,  // ISO date (YYYY-MM-DD)
+  pub contributors: ReadinessContributors,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReadinessContributors {
+  pub resting_heart_rate: Option<i64>,  // beats per minute
+}
+
+/// ---------------------------------------------------------------------------
+/// Oura API Data Fetching
+/// ---------------------------------------------------------------------------
+
+/// Fetch daily sleep data from Oura API for a date range
+pub async fn fetch_daily_sleep(
+  access_token: &str,
+  start_date: &str,  // YYYY-MM-DD
+  end_date: &str,    // YYYY-MM-DD
+) -> Result<DailySleepResponse, OuraError> {
+  let client = Client::new();
+  let url = format!(
+    "{}/daily_sleep?start_date={}&end_date={}",
+    OURA_API_BASE, start_date, end_date
+  );
+
+  let response = client
+    .get(&url)
+    .bearer_auth(access_token)
+    .send()
+    .await?;
+
+  if !response.status().is_success() {
+    let status = response.status();
+    let error_text = response.text().await.unwrap_or_default();
+    return Err(OuraError::Api(format!(
+      "Daily sleep API error {}: {}",
+      status, error_text
+    )));
+  }
+
+  Ok(response.json().await?)
+}
+
+/// Fetch sleep periods data (contains HRV) from Oura API for a date range
+pub async fn fetch_sleep_periods(
+  access_token: &str,
+  start_date: &str,  // YYYY-MM-DD
+  end_date: &str,    // YYYY-MM-DD
+) -> Result<SleepPeriodsResponse, OuraError> {
+  let client = Client::new();
+  let url = format!(
+    "{}/sleep?start_date={}&end_date={}",
+    OURA_API_BASE, start_date, end_date
+  );
+
+  let response = client
+    .get(&url)
+    .bearer_auth(access_token)
+    .send()
+    .await?;
+
+  if !response.status().is_success() {
+    let status = response.status();
+    let error_text = response.text().await.unwrap_or_default();
+    return Err(OuraError::Api(format!(
+      "Sleep periods API error {}: {}",
+      status, error_text
+    )));
+  }
+
+  Ok(response.json().await?)
+}
+
+/// Fetch daily readiness data (contains resting HR) from Oura API for a date range
+pub async fn fetch_daily_readiness(
+  access_token: &str,
+  start_date: &str,  // YYYY-MM-DD
+  end_date: &str,    // YYYY-MM-DD
+) -> Result<DailyReadinessResponse, OuraError> {
+  let client = Client::new();
+  let url = format!(
+    "{}/daily_readiness?start_date={}&end_date={}",
+    OURA_API_BASE, start_date, end_date
+  );
+
+  let response = client
+    .get(&url)
+    .bearer_auth(access_token)
+    .send()
+    .await?;
+
+  if !response.status().is_success() {
+    let status = response.status();
+    let error_text = response.text().await.unwrap_or_default();
+    return Err(OuraError::Api(format!(
+      "Daily readiness API error {}: {}",
+      status, error_text
+    )));
+  }
+
+  Ok(response.json().await?)
 }

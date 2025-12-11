@@ -19,6 +19,7 @@ pub struct Workout {
 }
 
 /// For inserting new workouts (without id, created_at)
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewWorkout {
   pub strava_id: String,

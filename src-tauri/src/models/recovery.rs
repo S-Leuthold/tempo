@@ -1,6 +1,7 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Recovery {
   pub id: i64,
@@ -16,6 +17,7 @@ pub struct Recovery {
 }
 
 /// For inserting new recovery records (without id, created_at)
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewRecovery {
   pub date: NaiveDate,
