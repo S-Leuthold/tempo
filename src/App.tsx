@@ -2,6 +2,8 @@ import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import "./App.css";
+import { CoachCards } from "./components/CoachCards";
+import type { WorkoutAnalysisV4 } from "./types/analysis";
 
 interface StravaAuthStatus {
   is_authenticated: boolean;
@@ -78,6 +80,7 @@ interface TrainingContext {
   workouts_this_week: number;
 }
 
+// Legacy format (still stored in DB)
 interface WorkoutAnalysis {
   id: number | null;
   workout_id: number;
@@ -90,7 +93,7 @@ interface WorkoutAnalysis {
 
 interface AnalysisResult {
   workout_id: number;
-  analysis: WorkoutAnalysis;
+  analysis: WorkoutAnalysisV4;  // V4 multi-card format
   input_tokens: number;
   output_tokens: number;
 }
@@ -105,7 +108,7 @@ function App() {
   const [workouts, setWorkouts] = useState<WorkoutWithMetrics[]>([]);
   const [settings, setSettings] = useState<UserSettings | null>(null);
   const [trainingContext, setTrainingContext] = useState<TrainingContext | null>(null);
-  const [latestAnalysis, setLatestAnalysis] = useState<WorkoutAnalysis | null>(null);
+  const [latestAnalysis, setLatestAnalysis] = useState<WorkoutAnalysisV4 | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -163,8 +166,10 @@ function App() {
 
   async function loadLatestAnalysis() {
     try {
-      const data = await invoke<WorkoutAnalysis | null>("get_latest_analysis");
-      setLatestAnalysis(data);
+      // Note: get_latest_analysis returns legacy format from DB
+      // We'll need to re-analyze to get V4 format
+      // For now, skip loading old analysis
+      setLatestAnalysis(null);
     } catch (e) {
       console.error("Failed to load latest analysis:", e);
     }
@@ -450,31 +455,7 @@ function App() {
           </div>
 
           {latestAnalysis ? (
-            <div className="analysis-content">
-              <div className="analysis-summary">
-                <p>{latestAnalysis.summary}</p>
-              </div>
-
-              <div className="analysis-recommendation">
-                <strong>Tomorrow:</strong>
-                <p>{latestAnalysis.tomorrow_recommendation}</p>
-              </div>
-
-              {latestAnalysis.risk_flags.length > 0 && (
-                <div className="analysis-flags">
-                  {latestAnalysis.risk_flags.map((flag, i) => (
-                    <span key={i} className="flag-badge">{flag}</span>
-                  ))}
-                </div>
-              )}
-
-              {latestAnalysis.goal_notes && (
-                <div className="analysis-goals">
-                  <strong>Goal Progress:</strong>
-                  <p>{latestAnalysis.goal_notes}</p>
-                </div>
-              )}
-            </div>
+            <CoachCards analysis={latestAnalysis} />
           ) : (
             <div className="analysis-empty">
               <p className="info">

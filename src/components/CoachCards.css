@@ -1,0 +1,375 @@
+.coach-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.coach-card {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.card-icon {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.card-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.card-content {
+  font-size: 14px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.card-content p {
+  margin: 0 0 8px 0;
+}
+
+.card-content p:last-child {
+  margin-bottom: 0;
+}
+
+/* Performance Card */
+.performance-card {
+  border-left: 3px solid #4a9eff;
+}
+
+.metric-comparison {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  font-size: 12px;
+  margin-bottom: 8px;
+  color: rgba(255, 255, 255, 0.7);
+  flex-wrap: wrap;
+}
+
+.comparison-label {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.delta {
+  font-weight: 600;
+  color: #fbbf24;
+  padding: 2px 6px;
+  background: rgba(251, 191, 36, 0.1);
+  border-radius: 4px;
+}
+
+.today-value {
+  font-weight: 500;
+}
+
+/* HR & Efficiency Card */
+.hr-card {
+  border-left: 3px solid #ef4444;
+}
+
+.hr-stats {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+
+.hr-value {
+  font-weight: 600;
+}
+
+.zone-badge {
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.zone-z1 {
+  background: #10b981;
+  color: white;
+}
+.zone-z2 {
+  background: #3b82f6;
+  color: white;
+}
+.zone-z3 {
+  background: #f59e0b;
+  color: white;
+}
+.zone-z4 {
+  background: #ef4444;
+  color: white;
+}
+.zone-z5 {
+  background: #dc2626;
+  color: white;
+}
+
+.hr-pct {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 12px;
+}
+
+.efficiency-note {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.7);
+  font-style: italic;
+}
+
+/* Training Status Card */
+.status-card {
+  border-left: 3px solid #8b5cf6;
+}
+
+.tsb-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.tsb-emoji {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.tsb-fresh {
+  color: #4ade80;
+}
+.tsb-slight {
+  color: #fbbf24;
+}
+.tsb-moderate {
+  color: #fb923c;
+}
+.tsb-high {
+  color: #ef4444;
+}
+
+.tsb-assessment {
+  font-size: 13px;
+  margin-bottom: 10px;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.flags-section {
+  margin: 8px 0;
+}
+
+.flag-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 13px;
+  color: #fbbf24;
+}
+
+.flag-emoji {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.status-metrics {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+
+.status-row:last-child {
+  margin-bottom: 0;
+}
+
+.status-emoji {
+  font-size: 14px;
+  line-height: 1;
+  min-width: 18px;
+}
+
+/* Tomorrow Card */
+.tomorrow-card {
+  background: rgba(74, 158, 255, 0.08);
+  border-left: 3px solid #4a9eff;
+}
+
+.tomorrow-prescription {
+  margin-bottom: 12px;
+}
+
+.activity-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.activity-type {
+  font-size: 16px;
+  color: #4a9eff;
+  text-transform: capitalize;
+}
+
+.duration {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.duration-badge {
+  padding: 3px 8px;
+  background: rgba(74, 158, 255, 0.2);
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #4a9eff;
+  letter-spacing: 0.5px;
+}
+
+.prescription-details {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.detail-row {
+  display: flex;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.detail-label {
+  color: rgba(255, 255, 255, 0.6);
+  min-width: 70px;
+}
+
+.tomorrow-rationale {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.8);
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+
+.confidence-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.confidence-high {
+  color: #4ade80;
+  border: 1px solid rgba(74, 222, 128, 0.3);
+}
+
+.confidence-medium {
+  color: #fbbf24;
+  border: 1px solid rgba(251, 191, 36, 0.3);
+}
+
+.confidence-low {
+  color: #fb923c;
+  border: 1px solid rgba(251, 146, 60, 0.3);
+}
+
+/* Eyes On Card */
+.eyes-on-card {
+  background: rgba(251, 191, 36, 0.08);
+  border-left: 3px solid #fbbf24;
+}
+
+.flag-item {
+  margin-bottom: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.flag-item:last-child {
+  margin-bottom: 0;
+}
+
+.priority-item {
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.priority-item:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+.priority-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+  gap: 12px;
+}
+
+.flag-name {
+  font-size: 14px;
+  color: #fbbf24;
+  text-transform: capitalize;
+}
+
+.current-value {
+  font-size: 11px;
+  color: #fb923c;
+  background: rgba(251, 146, 60, 0.15);
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.priority-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.priority-action {
+  font-size: 13px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.priority-threshold {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+  font-style: italic;
+}
+
+.priority-why {
+  font-size: 12px;
+  color: rgba(251, 191, 36, 0.8);
+  margin-top: 4px;
+  font-style: italic;
+}
