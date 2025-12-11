@@ -268,6 +268,7 @@ pub async fn exchange_code_for_tokens(
       ("client_secret", config.client_secret.as_str()),
       ("code", code),
       ("grant_type", "authorization_code"),
+      ("redirect_uri", config.redirect_uri.as_str()),
     ])
     .send()
     .await?;
