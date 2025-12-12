@@ -606,4 +606,40 @@ mod tests {
     let result = OuraContext::determine_resting_hr_trend(Some(51), Some(50));
     assert_eq!(result, Some("stable".to_string()));
   }
+
+  /// ---------------------------------------------------------------------------
+  /// Phase 8: Oura OAuth Helper Tests
+  /// ---------------------------------------------------------------------------
+
+  #[test]
+  fn test_build_oura_auth_url_contains_required_params() {
+    // Arrange
+    let config = OuraConfig {
+      client_id: "oura_client_123".to_string(),
+      client_secret: "oura_secret".to_string(),
+      redirect_uri: "http://localhost:8081/oura/callback".to_string(),
+    };
+
+    // Act
+    let url = build_auth_url(&config).expect("Should build Oura auth URL");
+
+    // Assert: URL should contain all required OAuth params
+    assert!(
+      url.contains("client_id=oura_client_123"),
+      "Should contain client_id"
+    );
+    assert!(url.contains("redirect_uri="), "Should contain redirect_uri");
+    assert!(
+      url.contains("response_type=code"),
+      "Should use authorization code flow"
+    );
+    assert!(
+      url.contains("scope=personal%20daily") || url.contains("scope=personal+daily"),
+      "Should request personal daily scope"
+    );
+    assert!(
+      url.starts_with("https://cloud.ouraring.com/oauth/authorize"),
+      "Should use Oura OAuth endpoint"
+    );
+  }
 }
