@@ -21,9 +21,9 @@ use crate::analysis::{TrainingContext, TrainingFlags};
 #[cfg(test)]
 use chrono::Duration;
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// Dimension Type: Progressive vs Regulated
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -34,14 +34,16 @@ pub enum DimensionType {
     Regulated,
 }
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// Lifecycle Status: Where are we in the progression journey
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum LifecycleStatus {
     /// current < ceiling, working toward goal
+    #[default]
     Building,
     /// current == ceiling, maintaining capability
     AtCeiling,
@@ -49,11 +51,6 @@ pub enum LifecycleStatus {
     Regressing,
 }
 
-impl Default for LifecycleStatus {
-    fn default() -> Self {
-        Self::Building
-    }
-}
 
 impl std::fmt::Display for LifecycleStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -77,9 +74,9 @@ impl std::str::FromStr for LifecycleStatus {
     }
 }
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// Step Configuration: How to progress values
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -185,9 +182,9 @@ impl StepConfig {
     }
 }
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// Progression Dimension: Generic dimension from database
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProgressionDimension {
@@ -273,9 +270,9 @@ impl ProgressionDimension {
     }
 }
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// Adherence Summary (preserved from original)
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdherenceSummary {
@@ -346,9 +343,9 @@ impl Default for AdherenceSummary {
     }
 }
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// Engine Decision: What Rust allows
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -364,9 +361,9 @@ pub enum EngineDecision {
     Regulated,                 // Dimension is regulated, not progressive
 }
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// Dimension Status: Status for one progression track
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DimensionStatus {
@@ -384,9 +381,9 @@ pub struct DimensionStatus {
     pub regulated_duration: Option<i32>,
 }
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// Progression Summary: Sent to LLM
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProgressionSummary {
@@ -487,7 +484,7 @@ impl ProgressionSummary {
             Self::check_criteria(&dim.name, dim, context, flags);
 
         // Apply overlap rule: if another dimension progressed in last 7 days, hold
-        let overlap_blocked = last_prog_dim.as_ref().map_or(false, |last| {
+        let overlap_blocked = last_prog_dim.as_ref().is_some_and(|last| {
             last != &dim.name && days_since_any < 7
         });
 
@@ -586,9 +583,9 @@ impl ProgressionSummary {
 
         // Fatigue thresholds vary by dimension
         let (fatigue_low, fatigue_threshold) = match name {
-            "run_interval" => (context.tsb.map_or(true, |t| t > -15.0), -15.0),
-            "long_run" => (context.tsb.map_or(true, |t| t > -15.0), -15.0),
-            _ => (context.tsb.map_or(true, |t| t > -10.0), -10.0),
+            "run_interval" => (context.tsb.is_none_or(|t| t > -15.0), -15.0),
+            "long_run" => (context.tsb.is_none_or(|t| t > -15.0), -15.0),
+            _ => (context.tsb.is_none_or(|t| t > -10.0), -10.0),
         };
 
         // HR stability matters more for run intervals
@@ -640,9 +637,9 @@ fn is_key_session_dimension(name: &str) -> bool {
     matches!(name, "long_run")
 }
 
-/// ---------------------------------------------------------------------------
-/// Database Operations
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Database Operations
+// ---------------------------------------------------------------------------
 
 /// Load all progression dimensions from database
 pub async fn load_all_dimensions(pool: &SqlitePool) -> Result<Vec<ProgressionDimension>, String> {
@@ -786,9 +783,9 @@ pub async fn log_progression(
     Ok(())
 }
 
-/// ---------------------------------------------------------------------------
-/// Progression Actions
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Progression Actions
+// ---------------------------------------------------------------------------
 
 /// Apply a progression to a dimension
 pub async fn apply_progression(
@@ -913,9 +910,9 @@ pub async fn update_ceiling(
     Ok(())
 }
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// Tests
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

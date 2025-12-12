@@ -7,9 +7,9 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// ---------------------------------------------------------------------------
-/// Configuration
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
 
 const CLAUDE_API_URL: &str = "https://api.anthropic.com/v1/messages";
 const CLAUDE_MODEL: &str = "claude-sonnet-4-20250514";
@@ -85,9 +85,9 @@ struct ClaudeErrorDetail {
   message: String,
 }
 
-/// ---------------------------------------------------------------------------
-/// Workout Analysis Response (from Claude) - V3 Trend-Focused Format
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Workout Analysis Response (from Claude) - V3 Trend-Focused Format
+// ---------------------------------------------------------------------------
 
 /// V3 analysis format with trend insight and structured prescription
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -151,9 +151,9 @@ pub struct FlagWithAction {
   pub action: String,
 }
 
-/// ---------------------------------------------------------------------------
-/// Workout Analysis Response (from Claude) - V4 Multi-Card Format
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Workout Analysis Response (from Claude) - V4 Multi-Card Format
+// ---------------------------------------------------------------------------
 
 /// V4 analysis format with purpose-built cards
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -357,9 +357,9 @@ impl From<WorkoutAnalysisV2> for WorkoutAnalysis {
   }
 }
 
-/// ---------------------------------------------------------------------------
-/// Claude Client
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Claude Client
+// ---------------------------------------------------------------------------
 
 pub struct ClaudeClient {
   client: Client,
@@ -744,9 +744,9 @@ Hope that helps!"#;
     assert!(legacy.risk_flags[0].contains("Hit Saturday's long session"));
   }
 
-  /// ---------------------------------------------------------------------------
-  /// Phase 6: V4 JSON Parsing Edge Cases
-  /// ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Phase 6: V4 JSON Parsing Edge Cases
+  // ---------------------------------------------------------------------------
 
   #[test]
   fn test_v4_parse_complete_valid_json() {

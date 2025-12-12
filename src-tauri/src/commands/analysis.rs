@@ -1,3 +1,5 @@
+#![allow(clippy::type_complexity)]
+
 use crate::analysis::{
   ContextPackage, HrZone, RecentWorkoutSummary, TrainingContext, TrainingFlags, UserSettings,
   WorkoutMetrics, WorkoutSummary,
@@ -66,9 +68,9 @@ pub async fn update_user_settings(
   Ok(())
 }
 
-/// ---------------------------------------------------------------------------
-/// Compute Metrics for Workouts
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Compute Metrics for Workouts
+// ---------------------------------------------------------------------------
 
 /// Compute and store metrics for all workouts that don't have them yet
 #[tauri::command]
@@ -297,9 +299,9 @@ pub async fn get_training_context(
   Ok(TrainingContext::compute(&workouts, &settings))
 }
 
-/// ---------------------------------------------------------------------------
-/// LLM Workout Analysis Commands
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// LLM Workout Analysis Commands
+// ---------------------------------------------------------------------------
 
 /// Error type that can be serialized for Tauri
 #[derive(Debug, Serialize)]
@@ -661,9 +663,9 @@ async fn get_workout_summaries(
   Ok(workouts)
 }
 
-/// ---------------------------------------------------------------------------
-/// Recent Workouts for Trend Context
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Recent Workouts for Trend Context
+// ---------------------------------------------------------------------------
 
 /// Get recent workouts of the same type for trend comparison
 /// Excludes the current workout being analyzed
@@ -783,9 +785,9 @@ async fn get_recent_all_workouts(
   Ok(workouts)
 }
 
-/// ---------------------------------------------------------------------------
-/// Adherence Computation
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Adherence Computation
+// ---------------------------------------------------------------------------
 
 /// Compute adherence summary from workout history
 ///
@@ -818,7 +820,7 @@ async fn compute_adherence(
     .iter()
     .filter(|(activity_type, duration)| {
       activity_type.to_lowercase() == "run"
-        && duration.map_or(false, |d| d > 45 * 60) // > 45 min
+        && duration.is_some_and(|d| d > 45 * 60) // > 45 min
     })
     .count() as u8;
 

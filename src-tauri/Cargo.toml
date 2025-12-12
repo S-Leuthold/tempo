@@ -35,7 +35,6 @@ url = "2"
 thiserror = "2"
 
 [dev-dependencies]
-mockito = "1.2"
 serial_test = "3.0"
 temp-env = "0.3"
 

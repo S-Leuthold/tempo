@@ -190,9 +190,9 @@ impl WorkoutMetrics {
   }
 }
 
-/// ---------------------------------------------------------------------------
-/// Tier 2: Rolling Context Metrics
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Tier 2: Rolling Context Metrics
+// ---------------------------------------------------------------------------
 
 /// A workout summary used for rolling calculations
 #[derive(Debug, Clone)]
@@ -447,9 +447,9 @@ impl TrainingContext {
   }
 }
 
-/// ---------------------------------------------------------------------------
-/// Tier 3: Training Flags (Boolean Alerts)
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Tier 3: Training Flags (Boolean Alerts)
+// ---------------------------------------------------------------------------
 
 /// Training flags that indicate potential issues or achievements
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -530,7 +530,7 @@ impl TrainingFlags {
 
     let has_long_run = days_21.iter().any(|w| {
       w.activity_type.to_lowercase() == "run"
-        && w.duration_seconds.map_or(false, |d| d >= long_run_threshold_secs)
+        && w.duration_seconds.is_some_and(|d| d >= long_run_threshold_secs)
     });
     if !has_long_run && days_21.iter().any(|w| w.activity_type.to_lowercase() == "run") {
       flags.long_run_gap = true;
@@ -547,7 +547,7 @@ impl TrainingFlags {
 
     let has_long_ride = days_21.iter().any(|w| {
       w.activity_type.to_lowercase() == "ride"
-        && w.duration_seconds.map_or(false, |d| d >= long_ride_threshold_secs)
+        && w.duration_seconds.is_some_and(|d| d >= long_ride_threshold_secs)
     });
     if !has_long_ride && days_21.iter().any(|w| w.activity_type.to_lowercase() == "ride") {
       flags.long_ride_gap = true;
@@ -646,9 +646,9 @@ impl TrainingFlags {
   }
 }
 
-/// ---------------------------------------------------------------------------
-/// Context Package for LLM
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Context Package for LLM
+// ---------------------------------------------------------------------------
 
 use crate::progression::ProgressionSummary;
 
@@ -693,6 +693,7 @@ pub struct ContextPackage {
 
 /// Workout structure metadata (for structured workouts like TrainerRoad)
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct WorkoutStructure {
   pub is_structured: bool,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -701,15 +702,6 @@ pub struct WorkoutStructure {
   pub prescribed_target_watts: Option<f64>,
 }
 
-impl Default for WorkoutStructure {
-  fn default() -> Self {
-    Self {
-      is_structured: false,
-      block_type: None,
-      prescribed_target_watts: None,
-    }
-  }
-}
 
 /// Workout-specific context for the LLM
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -855,7 +847,7 @@ impl FatigueContext {
       .iter()
       .filter(|w| {
         let days_ago = (now - w.started_at).num_days();
-        days_ago >= 7 && days_ago < 14
+        (7..14).contains(&days_ago)
       })
       .collect();
 
@@ -990,6 +982,7 @@ impl Default for SignificanceThresholds {
 
 impl ContextPackage {
   /// Build a context package from workout data and computed metrics
+  #[allow(clippy::too_many_arguments)]
   pub fn build(
     workout_type: &str,
     started_at: &chrono::DateTime<chrono::Utc>,
@@ -1065,7 +1058,7 @@ impl ContextPackage {
     use chrono::{Datelike, Duration, Weekday};
 
     let today = workout_date.weekday();
-    let tomorrow = (workout_date.clone() + Duration::days(1)).weekday();
+    let tomorrow = (*workout_date + Duration::days(1)).weekday();
 
     let day_name = |w: Weekday| -> String {
       match w {
@@ -1212,9 +1205,9 @@ mod tests {
     assert_eq!(settings.effective_lthr(), Some(176)); // 190 * 0.93 = 176.7 -> 176
   }
 
-  /// ---------------------------------------------------------------------------
-  /// Phase 4: Tier 2 Context Computation Tests
-  /// ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Phase 4: Tier 2 Context Computation Tests
+  // ---------------------------------------------------------------------------
 
   #[test]
   fn test_training_context_atl_ctl_tsb_normal() {
@@ -1928,9 +1921,9 @@ mod tests {
     );
   }
 
-  /// ---------------------------------------------------------------------------
-  /// Phase 5: AllowedDurations and FatigueContext Tests
-  /// ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Phase 5: AllowedDurations and FatigueContext Tests
+  // ---------------------------------------------------------------------------
 
   #[test]
   fn test_allowed_durations_from_tsb_band() {

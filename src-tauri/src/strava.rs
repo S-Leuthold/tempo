@@ -7,9 +7,9 @@ use std::net::TcpListener;
 use std::time::Duration as StdDuration;
 use url::Url;
 
-/// ---------------------------------------------------------------------------
-/// Configuration Constants
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Configuration Constants
+// ---------------------------------------------------------------------------
 
 const STRAVA_AUTH_URL: &str = "https://www.strava.com/oauth/authorize";
 const STRAVA_TOKEN_URL: &str = "https://www.strava.com/oauth/token";
@@ -17,9 +17,9 @@ const STRAVA_API_BASE: &str = "https://www.strava.com/api/v3";
 const REDIRECT_PORT: u16 = 8765;
 const TOKEN_REFRESH_BUFFER_MINUTES: i64 = 5;
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// OAuth Data Structures
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct StravaConfig {
@@ -83,9 +83,9 @@ impl StravaTokens {
   }
 }
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// Error Handling
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, thiserror::Error)]
 pub enum StravaError {
@@ -117,9 +117,9 @@ impl Serialize for StravaError {
   }
 }
 
-/// ---------------------------------------------------------------------------
-/// OAuth URL Generation
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// OAuth URL Generation
+// ---------------------------------------------------------------------------
 
 pub fn build_auth_url(config: &StravaConfig) -> Result<String, StravaError> {
   let mut url = Url::parse(STRAVA_AUTH_URL).map_err(|e| StravaError::OAuth(e.to_string()))?;
@@ -135,9 +135,9 @@ pub fn build_auth_url(config: &StravaConfig) -> Result<String, StravaError> {
   Ok(url.to_string())
 }
 
-/// ---------------------------------------------------------------------------
-/// Token Exchange (Authorization Code -> Tokens)
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Token Exchange (Authorization Code -> Tokens)
+// ---------------------------------------------------------------------------
 
 pub async fn exchange_code_for_tokens(
   config: &StravaConfig,
@@ -168,9 +168,9 @@ pub async fn exchange_code_for_tokens(
   Ok(StravaTokens::from_response(token_response))
 }
 
-/// ---------------------------------------------------------------------------
-/// Token Refresh
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Token Refresh
+// ---------------------------------------------------------------------------
 
 pub async fn refresh_tokens(
   config: &StravaConfig,
@@ -201,9 +201,9 @@ pub async fn refresh_tokens(
   Ok(StravaTokens::from_response(token_response))
 }
 
-/// ---------------------------------------------------------------------------
-/// OAuth Callback Server
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// OAuth Callback Server
+// ---------------------------------------------------------------------------
 
 pub struct CallbackResult {
   pub code: String,
@@ -229,7 +229,7 @@ pub fn wait_for_callback(timeout_seconds: u64) -> Result<CallbackResult, StravaE
     match listener.accept() {
       Ok((mut stream, _)) => {
         let mut buffer = [0; 2048];
-        stream.read(&mut buffer).ok();
+        let _ = stream.read(&mut buffer);
 
         let request = String::from_utf8_lossy(&buffer);
 
@@ -328,9 +328,9 @@ fn build_error_response(error: &str) -> String {
   )
 }
 
-/// ---------------------------------------------------------------------------
-/// Strava API - Activity Fetching
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Strava API - Activity Fetching
+// ---------------------------------------------------------------------------
 
 /// Activity summary from Strava API
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -359,9 +359,9 @@ pub struct StravaActivity {
   pub suffer_score: Option<f64>,
 }
 
-/// ---------------------------------------------------------------------------
-/// Strava API - Activity Streams (time series data)
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Strava API - Activity Streams (time series data)
+// ---------------------------------------------------------------------------
 
 /// Raw stream data from Strava API (array format)
 #[allow(dead_code)]
@@ -624,18 +624,18 @@ pub async fn fetch_activities(
   Ok(activities)
 }
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// Tests
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
   use super::*;
   use chrono::Utc;
 
-  /// ---------------------------------------------------------------------------
-  /// Phase 8: Strava Helper Functions (No HTTP Mocking)
-  /// ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Phase 8: Strava Helper Functions (No HTTP Mocking)
+  // ---------------------------------------------------------------------------
 
   #[test]
   fn test_build_auth_url_contains_required_params() {

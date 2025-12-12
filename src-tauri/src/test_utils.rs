@@ -17,8 +17,13 @@ use sqlx::SqlitePool;
 
 /// Create an in-memory SQLite database for testing
 /// Runs all migrations and returns a ready-to-use pool
+///
+/// Uses max_connections(1) to prevent multiple pool connections from creating
+/// isolated in-memory databases, which would cause intermittent test failures
 pub async fn setup_test_db() -> SqlitePool {
-  let pool = SqlitePool::connect("sqlite::memory:")
+  let pool = sqlx::sqlite::SqlitePoolOptions::new()
+    .max_connections(1)
+    .connect("sqlite::memory:")
     .await
     .expect("Failed to create in-memory database");
 
