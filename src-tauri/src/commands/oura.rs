@@ -355,3 +355,55 @@ pub async fn oura_sync_data(
     resting_hr_records: resting_hr_count,
   })
 }
+
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::test_utils::*;
+  use serial_test::serial;
+  use tauri::Manager;
+
+  #[tokio::test]
+  #[serial]
+  async fn test_oura_get_auth_status() {
+    let pool = setup_test_db().await;
+    let state = Arc::new(AppState { db: pool.clone() });
+    let app = tauri::test::mock_app();
+    app.manage(state);
+
+    let result = oura_get_auth_status(app.state()).await;
+    assert!(result.is_ok());
+
+    teardown_test_db(pool).await;
+  }
+
+  #[tokio::test]
+  #[serial]
+  async fn test_oura_disconnect() {
+    let pool = setup_test_db().await;
+    let state = Arc::new(AppState { db: pool.clone() });
+    let app = tauri::test::mock_app();
+    app.manage(state);
+
+    let result = oura_disconnect(app.state()).await;
+    assert!(result.is_ok());
+
+    teardown_test_db(pool).await;
+  }
+
+  #[tokio::test]
+  #[serial]
+  async fn test_oura_sync_no_auth() {
+    let pool = setup_test_db().await;
+    let state = Arc::new(AppState { db: pool.clone() });
+    let app = tauri::test::mock_app();
+    app.manage(state);
+
+    let result = oura_sync_data(app.state()).await;
+    // Should fail due to no auth
+    assert!(result.is_err());
+
+    teardown_test_db(pool).await;
+  }
+}
