@@ -834,3 +834,82 @@ async fn compute_adherence(
     consecutive_low_weeks,
   ))
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::test_utils::*;
+  use serial_test::serial;
+  use tauri::Manager;
+
+  #[tokio::test]
+  #[serial]
+  async fn test_get_user_settings() {
+    let pool = setup_test_db().await;
+    let state = Arc::new(AppState { db: pool.clone() });
+    let app = tauri::test::mock_app();
+    app.manage(state);
+
+    let result = get_user_settings(app.state()).await;
+    assert!(result.is_ok());
+
+    teardown_test_db(pool).await;
+  }
+
+  #[tokio::test]
+  #[serial]
+  async fn test_update_user_settings() {
+    let pool = setup_test_db().await;
+    let state = Arc::new(AppState { db: pool.clone() });
+    let app = tauri::test::mock_app();
+    app.manage(state);
+
+    let result = update_user_settings(app.state(), Some(190), Some(170), Some(250), Some(6)).await;
+    assert!(result.is_ok());
+
+    teardown_test_db(pool).await;
+  }
+
+  #[tokio::test]
+  #[serial]
+  async fn test_get_training_context() {
+    let pool = setup_test_db().await;
+    let state = Arc::new(AppState { db: pool.clone() });
+    let app = tauri::test::mock_app();
+    app.manage(state);
+
+    let result = get_training_context(app.state()).await;
+    assert!(result.is_ok());
+
+    teardown_test_db(pool).await;
+  }
+
+  #[tokio::test]
+  #[serial]
+  async fn test_compute_workout_metrics() {
+    let pool = setup_test_db().await;
+    seed_test_user_settings(&pool).await;
+    let state = Arc::new(AppState { db: pool.clone() });
+    let app = tauri::test::mock_app();
+    app.manage(state);
+
+    let result = compute_workout_metrics(app.state()).await;
+    assert!(result.is_ok());
+
+    teardown_test_db(pool).await;
+  }
+
+  #[tokio::test]
+  #[serial]
+  async fn test_get_workouts_with_metrics() {
+    let pool = setup_test_db().await;
+    let state = Arc::new(AppState { db: pool.clone() });
+    let app = tauri::test::mock_app();
+    app.manage(state);
+
+    let result = get_workouts_with_metrics(app.state(), Some(10)).await;
+    assert!(result.is_ok());
+
+    teardown_test_db(pool).await;
+  }
+}
