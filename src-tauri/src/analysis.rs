@@ -1211,4 +1211,915 @@ mod tests {
     // Should fall back to 93% of max = 177
     assert_eq!(settings.effective_lthr(), Some(176)); // 190 * 0.93 = 176.7 -> 176
   }
+
+  /// ---------------------------------------------------------------------------
+  /// Phase 4: Tier 2 Context Computation Tests
+  /// ---------------------------------------------------------------------------
+
+  #[test]
+  fn test_training_context_atl_ctl_tsb_normal() {
+    // Arrange: Create 42 days of workout history with consistent load
+    let settings = UserSettings {
+      max_hr: Some(190),
+      lthr: Some(170),
+      ftp: Some(250),
+      training_days_per_week: 6,
+    };
+
+    let mut workouts = Vec::new();
+    let now = chrono::Utc::now();
+
+    // Add 6 workouts per week for 6 weeks (42 days)
+    // Each workout: 60 min, avg HR 145 → rTSS ≈ 50
+    for week in 0..6 {
+      for day in &[1, 2, 3, 5, 6, 7] {
+        // Skip day 4 (rest day)
+        let days_ago = (week * 7) + day;
+        let activity_type = if day % 2 == 0 { "Run" } else { "Ride" };
+
+        workouts.push(WorkoutSummary {
+          started_at: now - chrono::Duration::days(days_ago),
+          activity_type: activity_type.to_string(),
+          duration_seconds: Some(3600), // 60 min
+          rtss: Some(50.0),
+          hr_zone: Some(HrZone::Z2),
+        });
+      }
+    }
+
+    // Act: Compute training context
+    let context = TrainingContext::compute(&workouts, &settings);
+
+    // Assert: Check ATL (7-day rTSS sum)
+    // Last 7 days: week 0, days 1,2,3,5,6 = 5 workouts × 50 rTSS = 250
+    // (day 7 would be 7 days ago, which is on the boundary)
+    assert!(context.atl.is_some());
+    let atl = context.atl.unwrap();
+    assert!((atl - 250.0).abs() < 10.0, "ATL should be ~250, got {}", atl);
+
+    // Assert: Check CTL (42-day daily average)
+    // 42 days, 6 workouts/week = 36 workouts × 50 rTSS = 1800 total
+    // Daily average = 1800 / 42 ≈ 42.86
+    assert!(context.ctl.is_some());
+    let ctl = context.ctl.unwrap();
+    assert!(
+      (ctl - 42.86).abs() < 5.0,
+      "CTL should be ~42.86, got {}",
+      ctl
+    );
+
+    // Assert: Check TSB (CTL - ATL/7)
+    // TSB = 42.86 - (250/7) ≈ 42.86 - 35.71 ≈ 7.15 (slightly fresh)
+    assert!(context.tsb.is_some());
+    let tsb = context.tsb.unwrap();
+    assert!(
+      (tsb - 7.15).abs() < 3.0,
+      "TSB should be ~7.15, got {}",
+      tsb
+    );
+
+    // Assert: Workouts this week should be 5
+    assert_eq!(context.workouts_this_week, 5);
+  }
+
+  #[test]
+  fn test_training_context_empty_workouts() {
+    // Arrange: No workout history
+    let settings = UserSettings::default();
+    let workouts: Vec<WorkoutSummary> = vec![];
+
+    // Act
+    let context = TrainingContext::compute(&workouts, &settings);
+
+    // Assert: All metrics should be None or default
+    assert!(context.atl.is_none());
+    assert!(context.ctl.is_none());
+    assert!(context.tsb.is_none());
+    assert_eq!(context.weekly_volume.total_hrs, 0.0);
+    assert_eq!(context.workouts_this_week, 0);
+    assert!(context.consistency_pct.is_some()); // Should be 0%
+    assert_eq!(context.consistency_pct.unwrap(), 0.0);
+  }
+
+  #[test]
+  fn test_training_context_single_workout() {
+    // Arrange: Only one workout from yesterday
+    let settings = UserSettings {
+      max_hr: Some(190),
+      lthr: Some(170),
+      ftp: None,
+      training_days_per_week: 6,
+    };
+
+    let now = chrono::Utc::now();
+    let workouts = vec![WorkoutSummary {
+      started_at: now - chrono::Duration::days(1),
+      activity_type: "Run".to_string(),
+      duration_seconds: Some(3600), // 60 min
+      rtss: Some(50.0),
+      hr_zone: Some(HrZone::Z2),
+    }];
+
+    // Act
+    let context = TrainingContext::compute(&workouts, &settings);
+
+    // Assert: ATL should be 50 (only 1 workout)
+    assert!(context.atl.is_some());
+    assert_eq!(context.atl.unwrap(), 50.0);
+
+    // Assert: CTL should be 50/42 ≈ 1.19
+    assert!(context.ctl.is_some());
+    let ctl = context.ctl.unwrap();
+    assert!((ctl - 1.19).abs() < 0.1);
+
+    // Assert: Weekly volume should be 1 hour
+    assert_eq!(context.weekly_volume.total_hrs, 1.0);
+    assert_eq!(context.weekly_volume.run_hrs, 1.0);
+    assert_eq!(context.weekly_volume.ride_hrs, 0.0);
+
+    // Assert: Workouts this week = 1
+    assert_eq!(context.workouts_this_week, 1);
+  }
+
+  #[test]
+  fn test_weekly_volume_by_modality() {
+    // Arrange: Mixed run/ride workouts in last 7 days
+    let settings = UserSettings::default();
+    let now = chrono::Utc::now();
+
+    let workouts = vec![
+      // 3 runs: 60 min, 45 min, 30 min = 2.25 hrs
+      WorkoutSummary {
+        started_at: now - chrono::Duration::days(1),
+        activity_type: "Run".to_string(),
+        duration_seconds: Some(3600),
+        rtss: Some(50.0),
+        hr_zone: Some(HrZone::Z2),
+      },
+      WorkoutSummary {
+        started_at: now - chrono::Duration::days(3),
+        activity_type: "Run".to_string(),
+        duration_seconds: Some(2700), // 45 min
+        rtss: Some(40.0),
+        hr_zone: Some(HrZone::Z2),
+      },
+      WorkoutSummary {
+        started_at: now - chrono::Duration::days(5),
+        activity_type: "Run".to_string(),
+        duration_seconds: Some(1800), // 30 min
+        rtss: Some(25.0),
+        hr_zone: Some(HrZone::Z1),
+      },
+      // 2 rides: 90 min, 60 min = 2.5 hrs
+      WorkoutSummary {
+        started_at: now - chrono::Duration::days(2),
+        activity_type: "Ride".to_string(),
+        duration_seconds: Some(5400), // 90 min
+        rtss: Some(60.0),
+        hr_zone: Some(HrZone::Z2),
+      },
+      WorkoutSummary {
+        started_at: now - chrono::Duration::days(4),
+        activity_type: "Ride".to_string(),
+        duration_seconds: Some(3600), // 60 min
+        rtss: Some(45.0),
+        hr_zone: Some(HrZone::Z2),
+      },
+    ];
+
+    // Act
+    let context = TrainingContext::compute(&workouts, &settings);
+
+    // Assert: Total volume = 4.75 hrs
+    assert!(
+      (context.weekly_volume.total_hrs - 4.75).abs() < 0.01,
+      "Expected 4.75 hrs, got {}",
+      context.weekly_volume.total_hrs
+    );
+
+    // Assert: Run volume = 2.25 hrs
+    assert!(
+      (context.weekly_volume.run_hrs - 2.25).abs() < 0.01,
+      "Expected 2.25 run hrs, got {}",
+      context.weekly_volume.run_hrs
+    );
+
+    // Assert: Ride volume = 2.5 hrs
+    assert!(
+      (context.weekly_volume.ride_hrs - 2.5).abs() < 0.01,
+      "Expected 2.5 ride hrs, got {}",
+      context.weekly_volume.ride_hrs
+    );
+
+    // Assert: Other volume = 0
+    assert_eq!(context.weekly_volume.other_hrs, 0.0);
+  }
+
+  #[test]
+  fn test_intensity_distribution() {
+    // Arrange: Workouts with different HR zones
+    let settings = UserSettings::default();
+    let now = chrono::Utc::now();
+
+    let workouts = vec![
+      // 60 min Z1
+      WorkoutSummary {
+        started_at: now - chrono::Duration::days(1),
+        activity_type: "Run".to_string(),
+        duration_seconds: Some(3600),
+        rtss: Some(20.0),
+        hr_zone: Some(HrZone::Z1),
+      },
+      // 120 min Z2
+      WorkoutSummary {
+        started_at: now - chrono::Duration::days(2),
+        activity_type: "Ride".to_string(),
+        duration_seconds: Some(7200),
+        rtss: Some(50.0),
+        hr_zone: Some(HrZone::Z2),
+      },
+      // 30 min Z3
+      WorkoutSummary {
+        started_at: now - chrono::Duration::days(3),
+        activity_type: "Run".to_string(),
+        duration_seconds: Some(1800),
+        rtss: Some(40.0),
+        hr_zone: Some(HrZone::Z3),
+      },
+      // 30 min Z4
+      WorkoutSummary {
+        started_at: now - chrono::Duration::days(4),
+        activity_type: "Run".to_string(),
+        duration_seconds: Some(1800),
+        rtss: Some(60.0),
+        hr_zone: Some(HrZone::Z4),
+      },
+    ];
+
+    // Total duration: 60 + 120 + 30 + 30 = 240 min
+    // Z1: 60/240 = 25%
+    // Z2: 120/240 = 50%
+    // Z3: 30/240 = 12.5%
+    // Z4: 30/240 = 12.5%
+    // Z5: 0%
+
+    // Act
+    let context = TrainingContext::compute(&workouts, &settings);
+
+    // Assert
+    let dist = &context.intensity_distribution;
+    assert!(
+      (dist.z1_pct - 25.0).abs() < 0.1,
+      "Z1 should be 25%, got {}",
+      dist.z1_pct
+    );
+    assert!(
+      (dist.z2_pct - 50.0).abs() < 0.1,
+      "Z2 should be 50%, got {}",
+      dist.z2_pct
+    );
+    assert!(
+      (dist.z3_pct - 12.5).abs() < 0.1,
+      "Z3 should be 12.5%, got {}",
+      dist.z3_pct
+    );
+    assert!(
+      (dist.z4_pct - 12.5).abs() < 0.1,
+      "Z4 should be 12.5%, got {}",
+      dist.z4_pct
+    );
+    assert_eq!(dist.z5_pct, 0.0);
+  }
+
+  #[test]
+  fn test_longest_session_tracking() {
+    // Arrange: Various workout durations in last 28 days
+    let settings = UserSettings::default();
+    let now = chrono::Utc::now();
+
+    let workouts = vec![
+      // Runs: 30, 45, 90, 60 min → longest = 90
+      WorkoutSummary {
+        started_at: now - chrono::Duration::days(1),
+        activity_type: "Run".to_string(),
+        duration_seconds: Some(1800), // 30 min
+        rtss: Some(25.0),
+        hr_zone: Some(HrZone::Z2),
+      },
+      WorkoutSummary {
+        started_at: now - chrono::Duration::days(5),
+        activity_type: "Run".to_string(),
+        duration_seconds: Some(2700), // 45 min
+        rtss: Some(40.0),
+        hr_zone: Some(HrZone::Z2),
+      },
+      WorkoutSummary {
+        started_at: now - chrono::Duration::days(10),
+        activity_type: "Run".to_string(),
+        duration_seconds: Some(5400), // 90 min ← longest run
+        rtss: Some(75.0),
+        hr_zone: Some(HrZone::Z2),
+      },
+      WorkoutSummary {
+        started_at: now - chrono::Duration::days(15),
+        activity_type: "Run".to_string(),
+        duration_seconds: Some(3600), // 60 min
+        rtss: Some(50.0),
+        hr_zone: Some(HrZone::Z2),
+      },
+      // Rides: 60, 120, 45 min → longest = 120
+      WorkoutSummary {
+        started_at: now - chrono::Duration::days(2),
+        activity_type: "Ride".to_string(),
+        duration_seconds: Some(3600), // 60 min
+        rtss: Some(45.0),
+        hr_zone: Some(HrZone::Z2),
+      },
+      WorkoutSummary {
+        started_at: now - chrono::Duration::days(8),
+        activity_type: "Ride".to_string(),
+        duration_seconds: Some(7200), // 120 min ← longest ride
+        rtss: Some(80.0),
+        hr_zone: Some(HrZone::Z2),
+      },
+      WorkoutSummary {
+        started_at: now - chrono::Duration::days(20),
+        activity_type: "Ride".to_string(),
+        duration_seconds: Some(2700), // 45 min
+        rtss: Some(35.0),
+        hr_zone: Some(HrZone::Z2),
+      },
+    ];
+
+    // Act
+    let context = TrainingContext::compute(&workouts, &settings);
+
+    // Assert: Longest run = 90 min
+    assert!(context.longest_session.run_min.is_some());
+    assert_eq!(context.longest_session.run_min.unwrap(), 90.0);
+
+    // Assert: Longest ride = 120 min
+    assert!(context.longest_session.ride_min.is_some());
+    assert_eq!(context.longest_session.ride_min.unwrap(), 120.0);
+  }
+
+  #[test]
+  fn test_flags_volume_spike_and_drop() {
+    // Arrange: Create workout history showing volume spike
+    let settings = UserSettings {
+      max_hr: Some(190),
+      lthr: Some(170),
+      ftp: None,
+      training_days_per_week: 6,
+    };
+
+    let now = chrono::Utc::now();
+    let mut workouts = Vec::new();
+
+    // Chronic load: 4 weeks of moderate training (3 workouts/week × 40 rTSS)
+    for week in 2..6 {
+      for day in &[1, 3, 5] {
+        let days_ago = (week * 7) + day;
+        workouts.push(WorkoutSummary {
+          started_at: now - chrono::Duration::days(days_ago),
+          activity_type: "Run".to_string(),
+          duration_seconds: Some(2400), // 40 min
+          rtss: Some(40.0),
+          hr_zone: Some(HrZone::Z2),
+        });
+      }
+    }
+
+    // Acute load: This week, massive spike (6 workouts × 70 rTSS)
+    for day in 1..=6 {
+      workouts.push(WorkoutSummary {
+        started_at: now - chrono::Duration::days(day),
+        activity_type: "Run".to_string(),
+        duration_seconds: Some(4200), // 70 min
+        rtss: Some(70.0),
+        hr_zone: Some(HrZone::Z3),
+      });
+    }
+
+    // Need to create mock progression dimensions for flags
+    use crate::progression::{LifecycleStatus, ProgressionDimension, StepConfig};
+    let dimensions = vec![ProgressionDimension {
+      id: 1,
+      name: "long_run".to_string(),
+      current_value: "60".to_string(),
+      ceiling_value: "90".to_string(),
+      step_config: StepConfig::Increment {
+        increment: 5,
+        unit: "min".to_string(),
+      },
+      status: LifecycleStatus::Building,
+      last_change_at: Some(now),
+      last_ceiling_touch_at: None,
+      maintenance_cadence_days: 14,
+      created_at: now,
+      updated_at: now,
+    }];
+
+    // Act
+    let context = TrainingContext::compute(&workouts, &settings);
+    let flags = TrainingFlags::compute(&workouts, &context, &settings, &dimensions);
+
+    // Assert: Volume spike should be detected
+    // ATL = 6 × 70 = 420
+    // CTL = (18 × 40) / 42 ≈ 17.14
+    // Chronic weekly = 17.14 × 7 = 120
+    // Spike threshold = 120 × 1.2 = 144
+    // 420 > 144 → spike detected
+    assert!(
+      flags.volume_spike,
+      "Volume spike should be detected (ATL=420 vs chronic weekly ~120)"
+    );
+  }
+
+  #[test]
+  fn test_flags_fatigue_and_form() {
+    // Arrange: Create scenarios for high fatigue and peak form
+    let settings = UserSettings {
+      max_hr: Some(190),
+      lthr: Some(170),
+      ftp: None,
+      training_days_per_week: 6,
+    };
+
+    let now = chrono::Utc::now();
+    use crate::progression::ProgressionDimension;
+    let dimensions: Vec<ProgressionDimension> = vec![];
+
+    // Scenario 1: High fatigue (TSB < -20)
+    let mut workouts_fatigued = Vec::new();
+
+    // Build chronic load over 6 weeks
+    for week in 1..7 {
+      for day in &[1, 2, 3, 5, 6] {
+        let days_ago = (week * 7) + day;
+        workouts_fatigued.push(WorkoutSummary {
+          started_at: now - chrono::Duration::days(days_ago),
+          activity_type: "Run".to_string(),
+          duration_seconds: Some(3600),
+          rtss: Some(50.0),
+          hr_zone: Some(HrZone::Z2),
+        });
+      }
+    }
+
+    // Massive acute spike this week (8 hard workouts)
+    for day in 1..=7 {
+      workouts_fatigued.push(WorkoutSummary {
+        started_at: now - chrono::Duration::days(day),
+        activity_type: "Run".to_string(),
+        duration_seconds: Some(4800),
+        rtss: Some(80.0),
+        hr_zone: Some(HrZone::Z4),
+      });
+    }
+
+    let context_fatigued = TrainingContext::compute(&workouts_fatigued, &settings);
+    let flags_fatigued =
+      TrainingFlags::compute(&workouts_fatigued, &context_fatigued, &settings, &dimensions);
+
+    // Assert: High fatigue flag
+    assert!(context_fatigued.tsb.is_some());
+    let tsb = context_fatigued.tsb.unwrap();
+    assert!(tsb < -20.0, "TSB should be < -20, got {}", tsb);
+    assert!(
+      flags_fatigued.high_fatigue,
+      "High fatigue flag should be set"
+    );
+
+    // Scenario 2: Peak form (TSB between +5 and +15)
+    let mut workouts_peak = Vec::new();
+
+    // Moderate chronic load
+    for week in 2..7 {
+      for day in &[1, 3, 5] {
+        let days_ago = (week * 7) + day;
+        workouts_peak.push(WorkoutSummary {
+          started_at: now - chrono::Duration::days(days_ago),
+          activity_type: "Run".to_string(),
+          duration_seconds: Some(3000),
+          rtss: Some(45.0),
+          hr_zone: Some(HrZone::Z2),
+        });
+      }
+    }
+
+    // Light taper this week (2 easy workouts)
+    for day in &[2, 5] {
+      workouts_peak.push(WorkoutSummary {
+        started_at: now - chrono::Duration::days(*day),
+        activity_type: "Run".to_string(),
+        duration_seconds: Some(1800),
+        rtss: Some(20.0),
+        hr_zone: Some(HrZone::Z1),
+      });
+    }
+
+    let context_peak = TrainingContext::compute(&workouts_peak, &settings);
+    let flags_peak = TrainingFlags::compute(&workouts_peak, &context_peak, &settings, &dimensions);
+
+    // Assert: Peak form flag
+    assert!(context_peak.tsb.is_some());
+    let tsb_peak = context_peak.tsb.unwrap();
+    assert!(
+      tsb_peak > 5.0 && tsb_peak < 15.0,
+      "TSB should be between +5 and +15, got {}",
+      tsb_peak
+    );
+    assert!(flags_peak.peak_form, "Peak form flag should be set");
+  }
+
+  #[test]
+  fn test_flags_long_session_gaps() {
+    // Arrange: Workouts without long sessions in 21 days
+    let settings = UserSettings::default();
+    let now = chrono::Utc::now();
+
+    use crate::progression::{LifecycleStatus, ProgressionDimension, StepConfig};
+    let dimensions = vec![
+      ProgressionDimension {
+        id: 1,
+        name: "long_run".to_string(),
+        current_value: "60".to_string(),
+        ceiling_value: "90".to_string(), // 90 min ceiling
+        step_config: StepConfig::Increment {
+          increment: 5,
+          unit: "min".to_string(),
+        },
+        status: LifecycleStatus::Building,
+        last_change_at: Some(now),
+        last_ceiling_touch_at: None,
+        maintenance_cadence_days: 14,
+        created_at: now,
+        updated_at: now,
+      },
+      ProgressionDimension {
+        id: 2,
+        name: "z2_ride".to_string(),
+        current_value: "45".to_string(),
+        ceiling_value: "60".to_string(), // 60 min ceiling
+        step_config: StepConfig::Regulated {
+          options: vec![30, 45, 60],
+          unit: "min".to_string(),
+        },
+        status: LifecycleStatus::AtCeiling,
+        last_change_at: Some(now),
+        last_ceiling_touch_at: None,
+        maintenance_cadence_days: 10,
+        created_at: now,
+        updated_at: now,
+      },
+    ];
+
+    // Only short runs and rides (all < ceiling)
+    let workouts = vec![
+      // Runs: all 30-45 min (< 90 min ceiling)
+      WorkoutSummary {
+        started_at: now - chrono::Duration::days(2),
+        activity_type: "Run".to_string(),
+        duration_seconds: Some(1800), // 30 min
+        rtss: Some(25.0),
+        hr_zone: Some(HrZone::Z2),
+      },
+      WorkoutSummary {
+        started_at: now - chrono::Duration::days(5),
+        activity_type: "Run".to_string(),
+        duration_seconds: Some(2700), // 45 min
+        rtss: Some(35.0),
+        hr_zone: Some(HrZone::Z2),
+      },
+      WorkoutSummary {
+        started_at: now - chrono::Duration::days(10),
+        activity_type: "Run".to_string(),
+        duration_seconds: Some(2400), // 40 min
+        rtss: Some(30.0),
+        hr_zone: Some(HrZone::Z2),
+      },
+      // Rides: all 30-45 min (< 60 min ceiling)
+      WorkoutSummary {
+        started_at: now - chrono::Duration::days(3),
+        activity_type: "Ride".to_string(),
+        duration_seconds: Some(1800), // 30 min
+        rtss: Some(20.0),
+        hr_zone: Some(HrZone::Z2),
+      },
+      WorkoutSummary {
+        started_at: now - chrono::Duration::days(7),
+        activity_type: "Ride".to_string(),
+        duration_seconds: Some(2700), // 45 min
+        rtss: Some(30.0),
+        hr_zone: Some(HrZone::Z2),
+      },
+    ];
+
+    // Act
+    let context = TrainingContext::compute(&workouts, &settings);
+    let flags = TrainingFlags::compute(&workouts, &context, &settings, &dimensions);
+
+    // Assert: Both gap flags should be set
+    assert!(
+      flags.long_run_gap,
+      "Long run gap should be detected (no run >= 90 min)"
+    );
+    assert!(
+      flags.long_ride_gap,
+      "Long ride gap should be detected (no ride >= 60 min)"
+    );
+  }
+
+  #[test]
+  fn test_flags_intensity_patterns() {
+    // Arrange: Test intensity_heavy and polarized_training flags
+    let settings = UserSettings::default();
+    let now = chrono::Utc::now();
+    use crate::progression::ProgressionDimension;
+    let dimensions: Vec<ProgressionDimension> = vec![];
+
+    // Scenario 1: Intensity heavy (> 40% in Z3+)
+    let workouts_intense = vec![
+      // 60 min Z3
+      WorkoutSummary {
+        started_at: now - chrono::Duration::days(1),
+        activity_type: "Run".to_string(),
+        duration_seconds: Some(3600),
+        rtss: Some(60.0),
+        hr_zone: Some(HrZone::Z3),
+      },
+      // 60 min Z4
+      WorkoutSummary {
+        started_at: now - chrono::Duration::days(2),
+        activity_type: "Run".to_string(),
+        duration_seconds: Some(3600),
+        rtss: Some(75.0),
+        hr_zone: Some(HrZone::Z4),
+      },
+      // 30 min Z2
+      WorkoutSummary {
+        started_at: now - chrono::Duration::days(3),
+        activity_type: "Ride".to_string(),
+        duration_seconds: Some(1800),
+        rtss: Some(25.0),
+        hr_zone: Some(HrZone::Z2),
+      },
+    ];
+    // Total: 150 min, Z3+: 120 min → 80% intense
+
+    let context_intense = TrainingContext::compute(&workouts_intense, &settings);
+    let flags_intense =
+      TrainingFlags::compute(&workouts_intense, &context_intense, &settings, &dimensions);
+
+    assert!(
+      flags_intense.intensity_heavy,
+      "Intensity heavy flag should be set (80% in Z3+)"
+    );
+    assert!(
+      !flags_intense.polarized_training,
+      "Polarized flag should NOT be set"
+    );
+
+    // Scenario 2: Polarized training (> 80% in Z1-Z2)
+    let workouts_polarized = vec![
+      // 120 min Z1
+      WorkoutSummary {
+        started_at: now - chrono::Duration::days(1),
+        activity_type: "Ride".to_string(),
+        duration_seconds: Some(7200),
+        rtss: Some(40.0),
+        hr_zone: Some(HrZone::Z1),
+      },
+      // 120 min Z2
+      WorkoutSummary {
+        started_at: now - chrono::Duration::days(2),
+        activity_type: "Ride".to_string(),
+        duration_seconds: Some(7200),
+        rtss: Some(55.0),
+        hr_zone: Some(HrZone::Z2),
+      },
+      // 30 min Z4
+      WorkoutSummary {
+        started_at: now - chrono::Duration::days(3),
+        activity_type: "Run".to_string(),
+        duration_seconds: Some(1800),
+        rtss: Some(50.0),
+        hr_zone: Some(HrZone::Z4),
+      },
+    ];
+    // Total: 270 min, Z1-Z2: 240 min → 88.9% low intensity
+
+    let context_polarized = TrainingContext::compute(&workouts_polarized, &settings);
+    let flags_polarized = TrainingFlags::compute(
+      &workouts_polarized,
+      &context_polarized,
+      &settings,
+      &dimensions,
+    );
+
+    assert!(
+      flags_polarized.polarized_training,
+      "Polarized training flag should be set (88.9% in Z1-Z2)"
+    );
+    assert!(
+      !flags_polarized.intensity_heavy,
+      "Intensity heavy flag should NOT be set"
+    );
+  }
+
+  /// ---------------------------------------------------------------------------
+  /// Phase 5: AllowedDurations and FatigueContext Tests
+  /// ---------------------------------------------------------------------------
+
+  #[test]
+  fn test_allowed_durations_from_tsb_band() {
+    // Test all TSB bands produce correct duration recommendations
+
+    // Fresh (TSB > 5): long recommended, 45/60/60
+    let fresh = AllowedDurations::from_tsb_band("fresh");
+    assert_eq!(fresh.z2_ride.short, 45);
+    assert_eq!(fresh.z2_ride.standard, 60);
+    assert_eq!(fresh.z2_ride.long, 60);
+    assert_eq!(fresh.z2_ride.recommended, "long");
+
+    // Slightly fatigued (TSB -10 to 0): standard recommended, 40/45/60
+    let slight = AllowedDurations::from_tsb_band("slightly_fatigued");
+    assert_eq!(slight.z2_ride.short, 40);
+    assert_eq!(slight.z2_ride.standard, 45);
+    assert_eq!(slight.z2_ride.long, 60);
+    assert_eq!(slight.z2_ride.recommended, "standard");
+
+    // Moderate fatigue (TSB -20 to -10): short recommended, 40/45/45
+    let moderate = AllowedDurations::from_tsb_band("moderate_fatigue");
+    assert_eq!(moderate.z2_ride.short, 40);
+    assert_eq!(moderate.z2_ride.standard, 45);
+    assert_eq!(moderate.z2_ride.long, 45);
+    assert_eq!(moderate.z2_ride.recommended, "short");
+
+    // High fatigue (TSB < -20): short recommended, 30/40/40
+    let high = AllowedDurations::from_tsb_band("high_fatigue");
+    assert_eq!(high.z2_ride.short, 30);
+    assert_eq!(high.z2_ride.standard, 40);
+    assert_eq!(high.z2_ride.long, 40);
+    assert_eq!(high.z2_ride.recommended, "short");
+
+    // Unknown band: defaults to standard, 40/45/60
+    let unknown = AllowedDurations::from_tsb_band("unknown");
+    assert_eq!(unknown.z2_ride.recommended, "standard");
+  }
+
+  #[test]
+  fn test_fatigue_context_tsb_bands() {
+    // Test TSB band classification from TrainingContext
+
+    // Fresh: TSB > 5
+    let ctx_fresh = TrainingContext {
+      atl: Some(200.0),
+      ctl: Some(250.0),
+      tsb: Some(10.0),
+      weekly_volume: WeeklyVolume::default(),
+      week_over_week_delta_pct: None,
+      intensity_distribution: IntensityDistribution::default(),
+      longest_session: LongestSession::default(),
+      consistency_pct: None,
+      workouts_this_week: 5,
+    };
+    let fatigue_fresh = FatigueContext::from_training_context(&ctx_fresh);
+    assert_eq!(fatigue_fresh.tsb_band, "fresh");
+    assert_eq!(fatigue_fresh.tsb, Some(10.0));
+
+    // Slightly fatigued: TSB -10 to 5
+    let ctx_slight = TrainingContext {
+      atl: Some(280.0),
+      ctl: Some(250.0),
+      tsb: Some(-5.0),
+      weekly_volume: WeeklyVolume::default(),
+      week_over_week_delta_pct: None,
+      intensity_distribution: IntensityDistribution::default(),
+      longest_session: LongestSession::default(),
+      consistency_pct: None,
+      workouts_this_week: 6,
+    };
+    let fatigue_slight = FatigueContext::from_training_context(&ctx_slight);
+    assert_eq!(fatigue_slight.tsb_band, "slightly_fatigued");
+
+    // Moderate fatigue: TSB -20 to -10
+    let ctx_moderate = TrainingContext {
+      atl: Some(350.0),
+      ctl: Some(250.0),
+      tsb: Some(-15.0),
+      weekly_volume: WeeklyVolume::default(),
+      week_over_week_delta_pct: None,
+      intensity_distribution: IntensityDistribution::default(),
+      longest_session: LongestSession::default(),
+      consistency_pct: None,
+      workouts_this_week: 7,
+    };
+    let fatigue_moderate = FatigueContext::from_training_context(&ctx_moderate);
+    assert_eq!(fatigue_moderate.tsb_band, "moderate_fatigue");
+
+    // High fatigue: TSB < -20
+    let ctx_high = TrainingContext {
+      atl: Some(450.0),
+      ctl: Some(250.0),
+      tsb: Some(-30.0),
+      weekly_volume: WeeklyVolume::default(),
+      week_over_week_delta_pct: None,
+      intensity_distribution: IntensityDistribution::default(),
+      longest_session: LongestSession::default(),
+      consistency_pct: None,
+      workouts_this_week: 8,
+    };
+    let fatigue_high = FatigueContext::from_training_context(&ctx_high);
+    assert_eq!(fatigue_high.tsb_band, "high_fatigue");
+  }
+
+  #[test]
+  fn test_week_over_week_delta_edge_cases() {
+    // Test various week-over-week delta scenarios
+    let settings = UserSettings::default();
+    let now = chrono::Utc::now();
+
+    // Case 1: First week (no prior week data) → 100% increase
+    let first_week = vec![WorkoutSummary {
+      started_at: now - chrono::Duration::days(2),
+      activity_type: "Run".to_string(),
+      duration_seconds: Some(3600), // 1 hour
+      rtss: Some(50.0),
+      hr_zone: Some(HrZone::Z2),
+    }];
+
+    let ctx_first = TrainingContext::compute(&first_week, &settings);
+    assert!(ctx_first.week_over_week_delta_pct.is_some());
+    assert_eq!(
+      ctx_first.week_over_week_delta_pct.unwrap(),
+      100.0,
+      "First week should show 100% increase"
+    );
+
+    // Case 2: Volume increase (this week 6hrs, last week 4hrs) → 50% increase
+    let mut increased = Vec::new();
+    // Last week (days 8-14): 4 hours
+    for day in 8..12 {
+      increased.push(WorkoutSummary {
+        started_at: now - chrono::Duration::days(day),
+        activity_type: "Run".to_string(),
+        duration_seconds: Some(3600), // 1 hour each
+        rtss: Some(50.0),
+        hr_zone: Some(HrZone::Z2),
+      });
+    }
+    // This week (days 1-6): 6 hours
+    for day in 1..7 {
+      increased.push(WorkoutSummary {
+        started_at: now - chrono::Duration::days(day),
+        activity_type: "Run".to_string(),
+        duration_seconds: Some(3600), // 1 hour each
+        rtss: Some(50.0),
+        hr_zone: Some(HrZone::Z2),
+      });
+    }
+
+    let ctx_increased = TrainingContext::compute(&increased, &settings);
+    assert!(ctx_increased.week_over_week_delta_pct.is_some());
+    let delta = ctx_increased.week_over_week_delta_pct.unwrap();
+    assert!(
+      (delta - 50.0).abs() < 5.0,
+      "Should show ~50% increase, got {}",
+      delta
+    );
+
+    // Case 3: Volume decrease (this week 2hrs, last week 5hrs) → -60% decrease
+    let mut decreased = Vec::new();
+    // Last week: 5 hours
+    for day in 8..13 {
+      decreased.push(WorkoutSummary {
+        started_at: now - chrono::Duration::days(day),
+        activity_type: "Run".to_string(),
+        duration_seconds: Some(3600),
+        rtss: Some(50.0),
+        hr_zone: Some(HrZone::Z2),
+      });
+    }
+    // This week: 2 hours
+    for day in &[2, 5] {
+      decreased.push(WorkoutSummary {
+        started_at: now - chrono::Duration::days(*day),
+        activity_type: "Run".to_string(),
+        duration_seconds: Some(3600),
+        rtss: Some(50.0),
+        hr_zone: Some(HrZone::Z2),
+      });
+    }
+
+    let ctx_decreased = TrainingContext::compute(&decreased, &settings);
+    assert!(ctx_decreased.week_over_week_delta_pct.is_some());
+    let delta_down = ctx_decreased.week_over_week_delta_pct.unwrap();
+    assert!(
+      (delta_down - (-60.0)).abs() < 5.0,
+      "Should show ~-60% decrease, got {}",
+      delta_down
+    );
+  }
 }

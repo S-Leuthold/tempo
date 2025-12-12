@@ -122,14 +122,32 @@ pub async fn seed_test_user_settings(pool: &SqlitePool) -> UserSettings {
 /// Uses INSERT OR REPLACE to handle duplicate seeds
 pub async fn seed_test_progression_dimensions(pool: &SqlitePool) -> Vec<String> {
   let dimensions = vec![
-    ("run_interval", "4:1", "continuous_45", "building"),
-    ("long_run", "30", "90", "building"),
-    ("z2_ride", "45", "60", "at_ceiling"),
+    (
+      "run_interval",
+      "4:1",
+      "continuous_45",
+      "building",
+      r#"{"type":"sequence","sequence":["4:1","5:1","6:1","continuous_45"]}"#,
+    ),
+    (
+      "long_run",
+      "30",
+      "90",
+      "building",
+      r#"{"type":"increment","increment":5,"unit":"min"}"#,
+    ),
+    (
+      "z2_ride",
+      "45",
+      "60",
+      "at_ceiling",
+      r#"{"type":"regulated","options":[30,45,60],"unit":"min"}"#,
+    ),
   ];
 
   let mut names = Vec::new();
 
-  for (name, current, ceiling, status) in dimensions {
+  for (name, current, ceiling, status, step_config_json) in dimensions {
     sqlx::query(
       r#"
       INSERT OR REPLACE INTO progression_dimensions (
@@ -142,7 +160,7 @@ pub async fn seed_test_progression_dimensions(pool: &SqlitePool) -> Vec<String> 
     .bind(name)
     .bind(current)
     .bind(ceiling)
-    .bind(r#"{"type":"sequence","values":["4:1","5:1","continuous_45"]}"#)
+    .bind(step_config_json)
     .bind(status)
     .bind(Utc::now())
     .execute(pool)
