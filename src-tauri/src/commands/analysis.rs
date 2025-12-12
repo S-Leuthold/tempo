@@ -1,3 +1,5 @@
+#![allow(clippy::type_complexity)]
+
 use crate::analysis::{
   ContextPackage, HrZone, RecentWorkoutSummary, TrainingContext, TrainingFlags, UserSettings,
   WorkoutMetrics, WorkoutSummary,
@@ -66,9 +68,9 @@ pub async fn update_user_settings(
   Ok(())
 }
 
-/// ---------------------------------------------------------------------------
-/// Compute Metrics for Workouts
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Compute Metrics for Workouts
+// ---------------------------------------------------------------------------
 
 /// Compute and store metrics for all workouts that don't have them yet
 #[tauri::command]
@@ -297,9 +299,9 @@ pub async fn get_training_context(
   Ok(TrainingContext::compute(&workouts, &settings))
 }
 
-/// ---------------------------------------------------------------------------
-/// LLM Workout Analysis Commands
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// LLM Workout Analysis Commands
+// ---------------------------------------------------------------------------
 
 /// Error type that can be serialized for Tauri
 #[derive(Debug, Serialize)]
@@ -661,9 +663,9 @@ async fn get_workout_summaries(
   Ok(workouts)
 }
 
-/// ---------------------------------------------------------------------------
-/// Recent Workouts for Trend Context
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Recent Workouts for Trend Context
+// ---------------------------------------------------------------------------
 
 /// Get recent workouts of the same type for trend comparison
 /// Excludes the current workout being analyzed
@@ -783,9 +785,9 @@ async fn get_recent_all_workouts(
   Ok(workouts)
 }
 
-/// ---------------------------------------------------------------------------
-/// Adherence Computation
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Adherence Computation
+// ---------------------------------------------------------------------------
 
 /// Compute adherence summary from workout history
 ///
@@ -818,7 +820,7 @@ async fn compute_adherence(
     .iter()
     .filter(|(activity_type, duration)| {
       activity_type.to_lowercase() == "run"
-        && duration.map_or(false, |d| d > 45 * 60) // > 45 min
+        && duration.is_some_and(|d| d > 45 * 60) // > 45 min
     })
     .count() as u8;
 
@@ -833,4 +835,83 @@ async fn compute_adherence(
     key_completed,
     consecutive_low_weeks,
   ))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::test_utils::*;
+  use serial_test::serial;
+  use tauri::Manager;
+
+  #[tokio::test]
+  #[serial]
+  async fn test_get_user_settings() {
+    let pool = setup_test_db().await;
+    let state = Arc::new(AppState { db: pool.clone() });
+    let app = tauri::test::mock_app();
+    app.manage(state);
+
+    let result = get_user_settings(app.state()).await;
+    assert!(result.is_ok());
+
+    teardown_test_db(pool).await;
+  }
+
+  #[tokio::test]
+  #[serial]
+  async fn test_update_user_settings() {
+    let pool = setup_test_db().await;
+    let state = Arc::new(AppState { db: pool.clone() });
+    let app = tauri::test::mock_app();
+    app.manage(state);
+
+    let result = update_user_settings(app.state(), Some(190), Some(170), Some(250), Some(6)).await;
+    assert!(result.is_ok());
+
+    teardown_test_db(pool).await;
+  }
+
+  #[tokio::test]
+  #[serial]
+  async fn test_get_training_context() {
+    let pool = setup_test_db().await;
+    let state = Arc::new(AppState { db: pool.clone() });
+    let app = tauri::test::mock_app();
+    app.manage(state);
+
+    let result = get_training_context(app.state()).await;
+    assert!(result.is_ok());
+
+    teardown_test_db(pool).await;
+  }
+
+  #[tokio::test]
+  #[serial]
+  async fn test_compute_workout_metrics() {
+    let pool = setup_test_db().await;
+    seed_test_user_settings(&pool).await;
+    let state = Arc::new(AppState { db: pool.clone() });
+    let app = tauri::test::mock_app();
+    app.manage(state);
+
+    let result = compute_workout_metrics(app.state()).await;
+    assert!(result.is_ok());
+
+    teardown_test_db(pool).await;
+  }
+
+  #[tokio::test]
+  #[serial]
+  async fn test_get_workouts_with_metrics() {
+    let pool = setup_test_db().await;
+    let state = Arc::new(AppState { db: pool.clone() });
+    let app = tauri::test::mock_app();
+    app.manage(state);
+
+    let result = get_workouts_with_metrics(app.state(), Some(10)).await;
+    assert!(result.is_ok());
+
+    teardown_test_db(pool).await;
+  }
 }

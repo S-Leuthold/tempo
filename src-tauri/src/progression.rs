@@ -21,9 +21,9 @@ use crate::analysis::{TrainingContext, TrainingFlags};
 #[cfg(test)]
 use chrono::Duration;
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// Dimension Type: Progressive vs Regulated
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -34,14 +34,16 @@ pub enum DimensionType {
     Regulated,
 }
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// Lifecycle Status: Where are we in the progression journey
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum LifecycleStatus {
     /// current < ceiling, working toward goal
+    #[default]
     Building,
     /// current == ceiling, maintaining capability
     AtCeiling,
@@ -49,11 +51,6 @@ pub enum LifecycleStatus {
     Regressing,
 }
 
-impl Default for LifecycleStatus {
-    fn default() -> Self {
-        Self::Building
-    }
-}
 
 impl std::fmt::Display for LifecycleStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -77,9 +74,9 @@ impl std::str::FromStr for LifecycleStatus {
     }
 }
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// Step Configuration: How to progress values
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -185,9 +182,9 @@ impl StepConfig {
     }
 }
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// Progression Dimension: Generic dimension from database
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProgressionDimension {
@@ -273,9 +270,9 @@ impl ProgressionDimension {
     }
 }
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// Adherence Summary (preserved from original)
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdherenceSummary {
@@ -346,9 +343,9 @@ impl Default for AdherenceSummary {
     }
 }
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// Engine Decision: What Rust allows
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -364,9 +361,9 @@ pub enum EngineDecision {
     Regulated,                 // Dimension is regulated, not progressive
 }
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// Dimension Status: Status for one progression track
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DimensionStatus {
@@ -384,9 +381,9 @@ pub struct DimensionStatus {
     pub regulated_duration: Option<i32>,
 }
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// Progression Summary: Sent to LLM
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProgressionSummary {
@@ -487,7 +484,7 @@ impl ProgressionSummary {
             Self::check_criteria(&dim.name, dim, context, flags);
 
         // Apply overlap rule: if another dimension progressed in last 7 days, hold
-        let overlap_blocked = last_prog_dim.as_ref().map_or(false, |last| {
+        let overlap_blocked = last_prog_dim.as_ref().is_some_and(|last| {
             last != &dim.name && days_since_any < 7
         });
 
@@ -586,9 +583,9 @@ impl ProgressionSummary {
 
         // Fatigue thresholds vary by dimension
         let (fatigue_low, fatigue_threshold) = match name {
-            "run_interval" => (context.tsb.map_or(true, |t| t > -15.0), -15.0),
-            "long_run" => (context.tsb.map_or(true, |t| t > -15.0), -15.0),
-            _ => (context.tsb.map_or(true, |t| t > -10.0), -10.0),
+            "run_interval" => (context.tsb.is_none_or(|t| t > -15.0), -15.0),
+            "long_run" => (context.tsb.is_none_or(|t| t > -15.0), -15.0),
+            _ => (context.tsb.is_none_or(|t| t > -10.0), -10.0),
         };
 
         // HR stability matters more for run intervals
@@ -640,9 +637,9 @@ fn is_key_session_dimension(name: &str) -> bool {
     matches!(name, "long_run")
 }
 
-/// ---------------------------------------------------------------------------
-/// Database Operations
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Database Operations
+// ---------------------------------------------------------------------------
 
 /// Load all progression dimensions from database
 pub async fn load_all_dimensions(pool: &SqlitePool) -> Result<Vec<ProgressionDimension>, String> {
@@ -786,9 +783,9 @@ pub async fn log_progression(
     Ok(())
 }
 
-/// ---------------------------------------------------------------------------
-/// Progression Actions
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Progression Actions
+// ---------------------------------------------------------------------------
 
 /// Apply a progression to a dimension
 pub async fn apply_progression(
@@ -913,9 +910,9 @@ pub async fn update_ceiling(
     Ok(())
 }
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// Tests
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -1081,5 +1078,179 @@ mod tests {
             }
             _ => panic!("Wrong type"),
         }
+    }
+
+    /// ---------------------------------------------------------------------------
+    /// Phase 7: Database Operations Tests
+    /// ---------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_load_and_save_dimension_roundtrip() {
+        // Arrange: Setup test DB with progression dimensions
+        let pool = crate::test_utils::setup_test_db().await;
+        crate::test_utils::seed_test_progression_dimensions(&pool).await;
+
+        // Act: Load a dimension
+        let mut dim = load_dimension(&pool, "run_interval")
+            .await
+            .expect("Should load run_interval");
+
+        // Verify initial state
+        assert_eq!(dim.name, "run_interval");
+        assert_eq!(dim.current_value, "4:1");
+        assert_eq!(dim.ceiling_value, "continuous_45");
+        assert_eq!(dim.status, LifecycleStatus::Building);
+
+        // Modify the dimension
+        dim.current_value = "5:1".to_string();
+        dim.status = LifecycleStatus::AtCeiling;
+        dim.last_ceiling_touch_at = Some(Utc::now());
+
+        // Act: Save it back
+        save_dimension(&pool, &dim)
+            .await
+            .expect("Should save dimension");
+
+        // Act: Reload to verify persistence
+        let reloaded = load_dimension(&pool, "run_interval")
+            .await
+            .expect("Should reload dimension");
+
+        // Assert: Changes persisted
+        assert_eq!(reloaded.current_value, "5:1");
+        assert_eq!(reloaded.status, LifecycleStatus::AtCeiling);
+        assert!(reloaded.last_ceiling_touch_at.is_some());
+
+        crate::test_utils::teardown_test_db(pool).await;
+    }
+
+    #[tokio::test]
+    async fn test_load_all_dimensions() {
+        // Arrange
+        let pool = crate::test_utils::setup_test_db().await;
+        crate::test_utils::seed_test_progression_dimensions(&pool).await;
+
+        // Act
+        let dimensions = load_all_dimensions(&pool)
+            .await
+            .expect("Should load all dimensions");
+
+        // Assert: Should have 3 seeded dimensions
+        assert_eq!(dimensions.len(), 3);
+
+        // Verify each dimension
+        let run_interval = dimensions.iter().find(|d| d.name == "run_interval").unwrap();
+        assert_eq!(run_interval.current_value, "4:1");
+
+        let long_run = dimensions.iter().find(|d| d.name == "long_run").unwrap();
+        assert_eq!(long_run.current_value, "30");
+
+        let z2_ride = dimensions.iter().find(|d| d.name == "z2_ride").unwrap();
+        assert_eq!(z2_ride.current_value, "45");
+        assert_eq!(z2_ride.status, LifecycleStatus::AtCeiling);
+
+        crate::test_utils::teardown_test_db(pool).await;
+    }
+
+    #[tokio::test]
+    async fn test_load_dimension_not_found() {
+        // Arrange
+        let pool = crate::test_utils::setup_test_db().await;
+
+        // Act: Try to load non-existent dimension
+        let result = load_dimension(&pool, "nonexistent").await;
+
+        // Assert: Should fail with helpful error
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not found"));
+
+        crate::test_utils::teardown_test_db(pool).await;
+    }
+
+    #[tokio::test]
+    async fn test_record_ceiling_touch_updates_timestamp() {
+        // Arrange
+        let pool = crate::test_utils::setup_test_db().await;
+        crate::test_utils::seed_test_progression_dimensions(&pool).await;
+
+        // Use z2_ride which is seeded as at_ceiling
+        let before = load_dimension(&pool, "z2_ride")
+            .await
+            .expect("Should load");
+        assert_eq!(before.status, LifecycleStatus::AtCeiling);
+        let before_touch = before.last_ceiling_touch_at;
+
+        // Act: Record ceiling touch
+        record_ceiling_touch(&pool, "z2_ride")
+            .await
+            .expect("Should record touch");
+
+        // Assert: Timestamp updated
+        let after = load_dimension(&pool, "z2_ride")
+            .await
+            .expect("Should reload");
+        assert!(after.last_ceiling_touch_at.is_some());
+
+        // If there was no prior touch, should be set now
+        // If there was a prior touch, new one should be more recent
+        if let Some(before_ts) = before_touch {
+            assert!(after.last_ceiling_touch_at.unwrap() > before_ts);
+        }
+
+        crate::test_utils::teardown_test_db(pool).await;
+    }
+
+    #[tokio::test]
+    async fn test_apply_regression_steps_back() {
+        // Arrange
+        let pool = crate::test_utils::setup_test_db().await;
+        crate::test_utils::seed_test_progression_dimensions(&pool).await;
+
+        // Manually advance run_interval to "5:1" first
+        let mut dim = load_dimension(&pool, "run_interval")
+            .await
+            .expect("Should load");
+        dim.current_value = "5:1".to_string();
+        save_dimension(&pool, &dim).await.expect("Should save");
+
+        // Act: Apply regression
+        let new_value = apply_regression(&pool, "run_interval")
+            .await
+            .expect("Should apply regression");
+
+        // Assert: Should step back to previous value
+        assert_eq!(new_value, "4:1", "Should regress from 5:1 to 4:1");
+
+        // Verify in database
+        let reloaded = load_dimension(&pool, "run_interval")
+            .await
+            .expect("Should reload");
+        assert_eq!(reloaded.current_value, "4:1");
+        // After regression, status should be Building (back to building toward ceiling)
+        assert_eq!(reloaded.status, LifecycleStatus::Building);
+
+        crate::test_utils::teardown_test_db(pool).await;
+    }
+
+    #[tokio::test]
+    async fn test_apply_regression_at_minimum() {
+        // Arrange: Dimension already at minimum value
+        let pool = crate::test_utils::setup_test_db().await;
+        crate::test_utils::seed_test_progression_dimensions(&pool).await;
+
+        // run_interval starts at "4:1" which is the minimum (no previous value)
+        // Act: Try to apply regression
+        let result = apply_regression(&pool, "run_interval").await;
+
+        // Assert: Should return error since there's no previous value
+        assert!(result.is_err(), "Should fail when no previous value exists");
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("No previous value"),
+            "Error should explain no previous value: {}",
+            err
+        );
+
+        crate::test_utils::teardown_test_db(pool).await;
     }
 }

@@ -7,9 +7,9 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// ---------------------------------------------------------------------------
-/// Configuration
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
 
 const CLAUDE_API_URL: &str = "https://api.anthropic.com/v1/messages";
 const CLAUDE_MODEL: &str = "claude-sonnet-4-20250514";
@@ -85,9 +85,9 @@ struct ClaudeErrorDetail {
   message: String,
 }
 
-/// ---------------------------------------------------------------------------
-/// Workout Analysis Response (from Claude) - V3 Trend-Focused Format
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Workout Analysis Response (from Claude) - V3 Trend-Focused Format
+// ---------------------------------------------------------------------------
 
 /// V3 analysis format with trend insight and structured prescription
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -151,9 +151,9 @@ pub struct FlagWithAction {
   pub action: String,
 }
 
-/// ---------------------------------------------------------------------------
-/// Workout Analysis Response (from Claude) - V4 Multi-Card Format
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Workout Analysis Response (from Claude) - V4 Multi-Card Format
+// ---------------------------------------------------------------------------
 
 /// V4 analysis format with purpose-built cards
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -357,9 +357,9 @@ impl From<WorkoutAnalysisV2> for WorkoutAnalysis {
   }
 }
 
-/// ---------------------------------------------------------------------------
-/// Claude Client
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Claude Client
+// ---------------------------------------------------------------------------
 
 pub struct ClaudeClient {
   client: Client,
@@ -742,5 +742,560 @@ Hope that helps!"#;
     assert_eq!(legacy.risk_flags.len(), 1);
     assert!(legacy.risk_flags[0].contains("long_run_gap"));
     assert!(legacy.risk_flags[0].contains("Hit Saturday's long session"));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Phase 6: V4 JSON Parsing Edge Cases
+  // ---------------------------------------------------------------------------
+
+  #[test]
+  fn test_v4_parse_complete_valid_json() {
+    // Arrange: Complete valid V4 JSON with all cards
+    let json = r#"{
+      "performance": {
+        "metric_name": "pace",
+        "comparison_date": "2025-12-10",
+        "comparison_value": "7:15/km",
+        "today_value": "7:18/km",
+        "delta": "+3 sec/km",
+        "insight": "Slightly slower than Tuesday"
+      },
+      "hr_efficiency": {
+        "avg_hr": 142,
+        "hr_zone": "Z2",
+        "hr_pct_max": 75,
+        "hr_assessment": "Controlled Z2 effort",
+        "efficiency_trend": "Stable"
+      },
+      "training_status": {
+        "tsb_value": -8.0,
+        "tsb_band": "slightly_fatigued",
+        "tsb_assessment": "Moderate load",
+        "top_flags": ["volume_spike"],
+        "adherence_note": "5/6 this week",
+        "progression_state": "Building"
+      },
+      "tomorrow": {
+        "activity_type": "Ride",
+        "duration_min": 45,
+        "duration_label": "STANDARD",
+        "intensity": "Z2",
+        "goal": "recovery",
+        "rationale": "Active recovery",
+        "confidence": "high"
+      },
+      "eyes_on": {
+        "priorities": [
+          {
+            "flag": "long_run_gap",
+            "current_value": "14 days",
+            "threshold": "Every 7 days",
+            "action": "Schedule long run Saturday",
+            "why_it_matters": "Maintains endurance"
+          }
+        ]
+      }
+    }"#;
+
+    // Act: Parse V4 JSON
+    let result: Result<WorkoutAnalysisV4, _> = serde_json::from_str(json);
+
+    // Assert: Should parse successfully
+    assert!(result.is_ok(), "Valid V4 JSON should parse");
+    let v4 = result.unwrap();
+    assert_eq!(v4.performance.metric_name, "pace");
+    assert_eq!(v4.hr_efficiency.avg_hr, 142);
+    assert_eq!(v4.training_status.tsb_value, -8.0);
+    assert_eq!(v4.tomorrow.duration_min, 45);
+    assert!(v4.eyes_on.is_some());
+    assert_eq!(v4.eyes_on.unwrap().priorities.len(), 1);
+  }
+
+  #[test]
+  fn test_v4_parse_missing_optional_eyes_on() {
+    // Arrange: Valid V4 JSON without optional eyes_on card
+    let json = r#"{
+      "performance": {
+        "metric_name": "power",
+        "comparison_date": "2025-12-10",
+        "comparison_value": "180W",
+        "today_value": "185W",
+        "delta": "+5W",
+        "insight": "Power trending up"
+      },
+      "hr_efficiency": {
+        "avg_hr": 128,
+        "hr_zone": "Z2",
+        "hr_pct_max": 67,
+        "hr_assessment": "Efficient Z2"
+      },
+      "training_status": {
+        "tsb_value": 2.0,
+        "tsb_band": "slightly_fatigued",
+        "tsb_assessment": "Recovering well",
+        "top_flags": [],
+        "adherence_note": "Perfect week",
+        "progression_state": "On track"
+      },
+      "tomorrow": {
+        "activity_type": "Run",
+        "duration_min": 45,
+        "duration_label": "STANDARD",
+        "intensity": "Z2",
+        "goal": "aerobic_maintenance",
+        "rationale": "Continue base building",
+        "confidence": "high"
+      }
+    }"#;
+
+    // Act
+    let result: Result<WorkoutAnalysisV4, _> = serde_json::from_str(json);
+
+    // Assert: Should parse successfully with eyes_on = None
+    assert!(result.is_ok());
+    let v4 = result.unwrap();
+    assert!(v4.eyes_on.is_none(), "eyes_on should be None when omitted");
+
+    // Conversion to legacy should handle missing eyes_on
+    let legacy: WorkoutAnalysis = v4.into();
+    assert_eq!(legacy.risk_flags.len(), 0, "Should have empty flags array");
+  }
+
+  #[test]
+  fn test_v4_parse_missing_optional_efficiency_trend() {
+    // Arrange: HR efficiency card without optional efficiency_trend
+    let json = r#"{
+      "performance": {
+        "metric_name": "pace",
+        "comparison_date": "2025-12-10",
+        "comparison_value": "7:30/km",
+        "today_value": "7:32/km",
+        "delta": "+2 sec/km",
+        "insight": "Consistent pace"
+      },
+      "hr_efficiency": {
+        "avg_hr": 145,
+        "hr_zone": "Z3",
+        "hr_pct_max": 76,
+        "hr_assessment": "Upper Z2/low Z3"
+      },
+      "training_status": {
+        "tsb_value": -5.0,
+        "tsb_band": "slightly_fatigued",
+        "tsb_assessment": "Normal training load",
+        "top_flags": [],
+        "adherence_note": "On track",
+        "progression_state": "Building"
+      },
+      "tomorrow": {
+        "activity_type": "Rest",
+        "duration_min": 0,
+        "duration_label": "REST",
+        "intensity": "none",
+        "goal": "recovery",
+        "rationale": "Scheduled rest day",
+        "confidence": "high"
+      }
+    }"#;
+
+    // Act
+    let result: Result<WorkoutAnalysisV4, _> = serde_json::from_str(json);
+
+    // Assert
+    assert!(result.is_ok());
+    let v4 = result.unwrap();
+    assert!(
+      v4.hr_efficiency.efficiency_trend.is_none(),
+      "efficiency_trend should be None when omitted"
+    );
+  }
+
+  #[test]
+  fn test_v4_parse_empty_arrays() {
+    // Arrange: V4 with empty top_flags and priorities arrays
+    let json = r#"{
+      "performance": {
+        "metric_name": "distance",
+        "comparison_date": "2025-12-10",
+        "comparison_value": "10.0km",
+        "today_value": "10.2km",
+        "delta": "+0.2km",
+        "insight": "Slight increase"
+      },
+      "hr_efficiency": {
+        "avg_hr": 140,
+        "hr_zone": "Z2",
+        "hr_pct_max": 74,
+        "hr_assessment": "Good aerobic effort"
+      },
+      "training_status": {
+        "tsb_value": 0.0,
+        "tsb_band": "slightly_fatigued",
+        "tsb_assessment": "Balanced",
+        "top_flags": [],
+        "adherence_note": "5/6 this week",
+        "progression_state": "Steady"
+      },
+      "tomorrow": {
+        "activity_type": "Ride",
+        "duration_min": 60,
+        "duration_label": "STANDARD",
+        "intensity": "Z2",
+        "goal": "aerobic_base",
+        "rationale": "Build endurance",
+        "confidence": "high"
+      },
+      "eyes_on": {
+        "priorities": []
+      }
+    }"#;
+
+    // Act
+    let result: Result<WorkoutAnalysisV4, _> = serde_json::from_str(json);
+
+    // Assert: Should handle empty arrays gracefully
+    assert!(result.is_ok());
+    let v4 = result.unwrap();
+    assert_eq!(v4.training_status.top_flags.len(), 0);
+    assert!(v4.eyes_on.is_some());
+    assert_eq!(v4.eyes_on.unwrap().priorities.len(), 0);
+  }
+
+  #[test]
+  fn test_v4_parse_nested_flag_priority_structure() {
+    // Arrange: Test nested FlagPriority with optional current_value
+    let json = r#"{
+      "performance": {
+        "metric_name": "power",
+        "comparison_date": "2025-12-10",
+        "comparison_value": "200W",
+        "today_value": "205W",
+        "delta": "+5W",
+        "insight": "Power improving"
+      },
+      "hr_efficiency": {
+        "avg_hr": 130,
+        "hr_zone": "Z2",
+        "hr_pct_max": 68,
+        "hr_assessment": "Low Z2"
+      },
+      "training_status": {
+        "tsb_value": -15.0,
+        "tsb_band": "moderate_fatigue",
+        "tsb_assessment": "Fatigued",
+        "top_flags": ["high_fatigue", "volume_spike"],
+        "adherence_note": "Overreaching",
+        "progression_state": "Hold"
+      },
+      "tomorrow": {
+        "activity_type": "Rest",
+        "duration_min": 0,
+        "duration_label": "REST",
+        "intensity": "none",
+        "goal": "recovery",
+        "rationale": "Need recovery",
+        "confidence": "high"
+      },
+      "eyes_on": {
+        "priorities": [
+          {
+            "flag": "high_fatigue",
+            "current_value": "TSB -15",
+            "threshold": "TSB > -10",
+            "action": "Rest day tomorrow",
+            "why_it_matters": "Prevent overtraining"
+          },
+          {
+            "flag": "intensity_heavy",
+            "threshold": "< 40% Z3+",
+            "action": "More Z2 this week",
+            "why_it_matters": "Aerobic foundation"
+          }
+        ]
+      }
+    }"#;
+
+    // Act
+    let result: Result<WorkoutAnalysisV4, _> = serde_json::from_str(json);
+
+    // Assert: Should parse nested structure with optional current_value
+    assert!(result.is_ok());
+    let v4 = result.unwrap();
+    let eyes = v4.eyes_on.unwrap();
+    assert_eq!(eyes.priorities.len(), 2);
+
+    // First priority has current_value
+    assert_eq!(eyes.priorities[0].flag, "high_fatigue");
+    assert!(eyes.priorities[0].current_value.is_some());
+    assert_eq!(eyes.priorities[0].current_value.as_ref().unwrap(), "TSB -15");
+
+    // Second priority missing current_value (optional)
+    assert_eq!(eyes.priorities[1].flag, "intensity_heavy");
+    assert!(eyes.priorities[1].current_value.is_none());
+  }
+
+  #[test]
+  fn test_v4_parse_negative_numbers() {
+    // Arrange: Test parsing of negative TSB values and deltas
+    let json = r#"{
+      "performance": {
+        "metric_name": "pace",
+        "comparison_date": "2025-12-10",
+        "comparison_value": "7:00/km",
+        "today_value": "7:10/km",
+        "delta": "-10 sec/km",
+        "insight": "Slower pace"
+      },
+      "hr_efficiency": {
+        "avg_hr": 155,
+        "hr_zone": "Z3",
+        "hr_pct_max": 82,
+        "hr_assessment": "Z3 effort"
+      },
+      "training_status": {
+        "tsb_value": -25.5,
+        "tsb_band": "high_fatigue",
+        "tsb_assessment": "Deeply fatigued",
+        "top_flags": ["high_fatigue"],
+        "adherence_note": "Overloaded",
+        "progression_state": "Regressing"
+      },
+      "tomorrow": {
+        "activity_type": "Rest",
+        "duration_min": 0,
+        "duration_label": "REST",
+        "intensity": "none",
+        "goal": "recovery",
+        "rationale": "Critical recovery needed",
+        "confidence": "very_high"
+      }
+    }"#;
+
+    // Act
+    let result: Result<WorkoutAnalysisV4, _> = serde_json::from_str(json);
+
+    // Assert: Negative numbers should parse correctly
+    assert!(result.is_ok());
+    let v4 = result.unwrap();
+    assert_eq!(v4.training_status.tsb_value, -25.5);
+    assert_eq!(v4.tomorrow.duration_min, 0); // Zero is valid
+  }
+
+  #[test]
+  fn test_v4_parse_with_unicode_and_special_chars() {
+    // Arrange: JSON with unicode, quotes, and special characters in strings
+    let json = r#"{
+      "performance": {
+        "metric_name": "distance",
+        "comparison_date": "2025-12-10",
+        "comparison_value": "10.5km",
+        "today_value": "10.7km",
+        "delta": "+200m",
+        "insight": "Distance up—nice \"push\" today! 💪"
+      },
+      "hr_efficiency": {
+        "avg_hr": 138,
+        "hr_zone": "Z2",
+        "hr_pct_max": 73,
+        "hr_assessment": "HR stayed in Z2 → good control",
+        "efficiency_trend": "Improving (3% better)"
+      },
+      "training_status": {
+        "tsb_value": -6.0,
+        "tsb_band": "slightly_fatigued",
+        "tsb_assessment": "Normal load",
+        "top_flags": [],
+        "adherence_note": "Perfect week (6/6)",
+        "progression_state": "On track"
+      },
+      "tomorrow": {
+        "activity_type": "Rest",
+        "duration_min": 0,
+        "duration_label": "REST",
+        "intensity": "none",
+        "goal": "recovery",
+        "rationale": "Scheduled rest → let it work",
+        "confidence": "high"
+      }
+    }"#;
+
+    // Act
+    let result: Result<WorkoutAnalysisV4, _> = serde_json::from_str(json);
+
+    // Assert: Should handle unicode and special chars
+    assert!(result.is_ok());
+    let v4 = result.unwrap();
+    assert!(v4.performance.insight.contains("push"));
+    assert!(v4.hr_efficiency.hr_assessment.contains("→"));
+  }
+
+  #[test]
+  fn test_extract_json_with_trailing_comma() {
+    // Arrange: JSON with trailing comma (common LLM mistake) - should fail gracefully
+    let input = r#"{
+      "summary": "Good workout",
+      "risk_flags": [],
+    }"#;
+
+    // Act: extract_json will extract it, but serde will fail
+    let extracted = extract_json(input);
+    assert!(extracted.is_ok());
+
+    // Parsing should fail due to trailing comma
+    let parse_result: Result<WorkoutAnalysis, _> = serde_json::from_str(&extracted.unwrap());
+    assert!(
+      parse_result.is_err(),
+      "Trailing comma should cause parse error"
+    );
+  }
+
+  #[test]
+  fn test_extract_json_multiline_with_comments() {
+    // Arrange: JSON embedded in text with // comments (invalid JSON)
+    let input = r#"Here's the analysis:
+
+```json
+{
+  "performance": {  // Performance metrics
+    "metric_name": "pace",
+    "comparison_date": "2025-12-10",
+    "comparison_value": "7:20/km",
+    "today_value": "7:22/km",
+    "delta": "+2 sec/km",
+    "insight": "Steady pace"
+  }
+}
+```"#;
+
+    // Act: extract_json should extract it
+    let extracted = extract_json(input);
+    assert!(extracted.is_ok());
+
+    // But parsing will fail due to comments
+    let json = extracted.unwrap();
+    assert!(json.contains("//"), "Comments should be in extracted JSON");
+
+    let parse_result: Result<PerformanceCard, _> = serde_json::from_str(&json);
+    assert!(
+      parse_result.is_err(),
+      "JSON with comments should fail to parse"
+    );
+  }
+
+  #[test]
+  fn test_extract_json_no_json_found() {
+    // Arrange: Text with no JSON at all
+    let input = "This is just plain text with no JSON structure whatsoever.";
+
+    // Act & Assert: Should return error
+    let result = extract_json(input);
+    assert!(result.is_err(), "Should fail when no JSON found");
+  }
+
+  #[test]
+  fn test_extract_json_incomplete_json() {
+    // Arrange: Incomplete JSON (missing closing brace)
+    let input = r#"{"summary": "test", "risk_flags": ["#;
+
+    // Act: extract_json might extract it
+    let extracted = extract_json(input);
+
+    // If extracted, serde should fail
+    if let Ok(json) = extracted {
+      let parse_result: Result<WorkoutAnalysis, _> = serde_json::from_str(&json);
+      assert!(
+        parse_result.is_err(),
+        "Incomplete JSON should fail to parse"
+      );
+    }
+  }
+
+  #[test]
+  fn test_v4_card_validation_missing_required_field() {
+    // Arrange: V4 JSON missing required field (metric_name)
+    let json = r#"{
+      "performance": {
+        "comparison_date": "2025-12-10",
+        "comparison_value": "7:20/km",
+        "today_value": "7:22/km",
+        "delta": "+2 sec/km",
+        "insight": "Steady"
+      },
+      "hr_efficiency": {
+        "avg_hr": 140,
+        "hr_zone": "Z2",
+        "hr_pct_max": 74,
+        "hr_assessment": "Good"
+      },
+      "training_status": {
+        "tsb_value": -8.0,
+        "tsb_band": "slightly_fatigued",
+        "tsb_assessment": "Normal",
+        "top_flags": [],
+        "adherence_note": "Good",
+        "progression_state": "Building"
+      },
+      "tomorrow": {
+        "activity_type": "Run",
+        "duration_min": 45,
+        "duration_label": "STANDARD",
+        "intensity": "Z2",
+        "goal": "aerobic",
+        "rationale": "Base building",
+        "confidence": "high"
+      }
+    }"#;
+
+    // Act & Assert: Should fail due to missing metric_name
+    let result: Result<WorkoutAnalysisV4, _> = serde_json::from_str(json);
+    assert!(
+      result.is_err(),
+      "Should fail when required field is missing"
+    );
+  }
+
+  #[test]
+  fn test_v4_parse_wrong_type_for_field() {
+    // Arrange: V4 JSON with string instead of number for avg_hr
+    let json = r#"{
+      "performance": {
+        "metric_name": "pace",
+        "comparison_date": "2025-12-10",
+        "comparison_value": "7:20/km",
+        "today_value": "7:22/km",
+        "delta": "+2 sec/km",
+        "insight": "Steady"
+      },
+      "hr_efficiency": {
+        "avg_hr": "140",
+        "hr_zone": "Z2",
+        "hr_pct_max": 74,
+        "hr_assessment": "Good"
+      },
+      "training_status": {
+        "tsb_value": -8.0,
+        "tsb_band": "slightly_fatigued",
+        "tsb_assessment": "Normal",
+        "top_flags": [],
+        "adherence_note": "Good",
+        "progression_state": "Building"
+      },
+      "tomorrow": {
+        "activity_type": "Run",
+        "duration_min": 45,
+        "duration_label": "STANDARD",
+        "intensity": "Z2",
+        "goal": "aerobic",
+        "rationale": "Base",
+        "confidence": "high"
+      }
+    }"#;
+
+    // Act & Assert: Should fail due to type mismatch
+    let result: Result<WorkoutAnalysisV4, _> = serde_json::from_str(json);
+    assert!(
+      result.is_err(),
+      "Should fail when field has wrong type (string vs i64)"
+    );
   }
 }

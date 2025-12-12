@@ -44,3 +44,47 @@ pub async fn initialize_db<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Resu
 
   Ok(pool)
 }
+
+/// ---------------------------------------------------------------------------
+/// Tests
+/// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[tokio::test]
+  async fn test_create_in_memory_db_and_run_migrations() {
+    // Test that we can create an in-memory DB and run migrations
+    let pool = SqlitePool::connect("sqlite::memory:")
+      .await
+      .expect("Failed to create pool");
+
+    let result = sqlx::migrate!("./migrations").run(&pool).await;
+    assert!(result.is_ok(), "Migrations should succeed");
+
+    // Verify key tables exist
+    let tables: Vec<(String,)> = sqlx::query_as(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('workouts', 'user_settings')"
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("Failed to query tables");
+
+    assert!(tables.len() >= 2, "Expected at least 2 key tables");
+    pool.close().await;
+  }
+
+  #[tokio::test]
+  async fn test_app_state_holds_pool() {
+    // Test that AppState struct is correctly defined
+    let pool = SqlitePool::connect("sqlite::memory:")
+      .await
+      .expect("Failed to create pool");
+
+    let _state = AppState { db: pool.clone() };
+    // If this compiles and runs, AppState is valid
+    pool.close().await;
+  }
+}
+

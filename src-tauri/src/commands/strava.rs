@@ -1,3 +1,5 @@
+#![allow(clippy::type_complexity)]
+
 use crate::db::AppState;
 use crate::strava::{
   build_auth_url, downsample_streams, exchange_code_for_tokens, fetch_activities,
@@ -9,9 +11,9 @@ use serde::Serialize;
 use std::sync::Arc;
 use tauri::State;
 
-/// ---------------------------------------------------------------------------
-/// Start OAuth Flow
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Start OAuth Flow
+// ---------------------------------------------------------------------------
 
 /// Initiates Strava OAuth by returning the authorization URL.
 /// Frontend should open this URL in the default browser.
@@ -22,9 +24,9 @@ pub async fn strava_start_auth() -> Result<String, StravaError> {
   Ok(auth_url)
 }
 
-/// ---------------------------------------------------------------------------
-/// Wait for Callback and Exchange Code
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Wait for Callback and Exchange Code
+// ---------------------------------------------------------------------------
 
 /// Waits for the OAuth callback, exchanges the code for tokens, and stores them.
 /// This should be called immediately after strava_start_auth.
@@ -47,9 +49,9 @@ pub async fn strava_complete_auth(state: State<'_, Arc<AppState>>) -> Result<(),
   Ok(())
 }
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// Check Authentication Status
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
 pub struct StravaAuthStatus {
@@ -76,9 +78,9 @@ pub async fn strava_get_auth_status(
   }
 }
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// Refresh Tokens
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[tauri::command]
 pub async fn strava_refresh_tokens(state: State<'_, Arc<AppState>>) -> Result<(), StravaError> {
@@ -95,9 +97,9 @@ pub async fn strava_refresh_tokens(state: State<'_, Arc<AppState>>) -> Result<()
   Ok(())
 }
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// Disconnect Strava
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[tauri::command]
 pub async fn strava_disconnect(state: State<'_, Arc<AppState>>) -> Result<(), StravaError> {
@@ -113,9 +115,9 @@ pub async fn strava_disconnect(state: State<'_, Arc<AppState>>) -> Result<(), St
   Ok(())
 }
 
-/// ---------------------------------------------------------------------------
-/// Get Valid Access Token (with auto-refresh)
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Get Valid Access Token (with auto-refresh)
+// ---------------------------------------------------------------------------
 
 /// Internal helper: get a valid access token, refreshing if necessary.
 /// This will be used by activity-fetching commands.
@@ -132,9 +134,9 @@ pub async fn get_valid_access_token(db: &crate::db::DbPool) -> Result<String, St
   Ok(tokens.access_token)
 }
 
-/// ---------------------------------------------------------------------------
-/// Database Helpers
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Database Helpers
+// ---------------------------------------------------------------------------
 
 async fn save_tokens(db: &crate::db::DbPool, tokens: &StravaTokens) -> Result<(), StravaError> {
   sqlx::query(
@@ -149,7 +151,7 @@ async fn save_tokens(db: &crate::db::DbPool, tokens: &StravaTokens) -> Result<()
   )
   .bind(&tokens.access_token)
   .bind(&tokens.refresh_token)
-  .bind(&tokens.expires_at)
+  .bind(tokens.expires_at)
   .execute(db)
   .await
   .map_err(|e| StravaError::Database(e.to_string()))?;
@@ -176,9 +178,9 @@ async fn load_tokens(db: &crate::db::DbPool) -> Result<Option<StravaTokens>, Str
   }
 }
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// Sync Activities from Strava
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
 pub struct SyncResult {
@@ -272,7 +274,7 @@ async fn save_activity(
   )
   .bind(activity.id.to_string())
   .bind(&activity.activity_type)
-  .bind(&activity.start_date)
+  .bind(activity.start_date)
   .bind(activity.moving_time)
   .bind(activity.distance)
   .bind(activity.total_elevation_gain)
@@ -323,4 +325,60 @@ async fn save_activity_samples(
   .map_err(|e| StravaError::Database(e.to_string()))?;
 
   Ok(())
+}
+
+
+/// ---------------------------------------------------------------------------  
+/// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::test_utils::*;
+  use serial_test::serial;
+  use tauri::Manager;
+
+  #[tokio::test]
+  #[serial]
+  async fn test_strava_get_auth_status() {
+    let pool = setup_test_db().await;
+    let state = Arc::new(AppState { db: pool.clone() });
+    let app = tauri::test::mock_app();
+    app.manage(state);
+
+    let result = strava_get_auth_status(app.state()).await;
+    assert!(result.is_ok());
+
+    teardown_test_db(pool).await;
+  }
+
+  #[tokio::test]
+  #[serial]
+  async fn test_strava_disconnect() {
+    let pool = setup_test_db().await;
+    let state = Arc::new(AppState { db: pool.clone() });
+    let app = tauri::test::mock_app();
+    app.manage(state);
+
+    let result = strava_disconnect(app.state()).await;
+    assert!(result.is_ok());
+
+    teardown_test_db(pool).await;
+  }
+
+  #[tokio::test]
+  #[serial]
+  async fn test_strava_sync_no_auth() {
+    let pool = setup_test_db().await;
+    let state = Arc::new(AppState { db: pool.clone() });
+    let app = tauri::test::mock_app();
+    app.manage(state);
+
+    let result = strava_sync_activities(app.state()).await;
+    // Should fail due to no auth
+    assert!(result.is_err());
+
+    teardown_test_db(pool).await;
+  }
 }

@@ -7,9 +7,9 @@ use std::net::TcpListener;
 use std::time::Duration as StdDuration;
 use url::Url;
 
-/// ---------------------------------------------------------------------------
-/// Configuration Constants
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Configuration Constants
+// ---------------------------------------------------------------------------
 
 const STRAVA_AUTH_URL: &str = "https://www.strava.com/oauth/authorize";
 const STRAVA_TOKEN_URL: &str = "https://www.strava.com/oauth/token";
@@ -17,9 +17,9 @@ const STRAVA_API_BASE: &str = "https://www.strava.com/api/v3";
 const REDIRECT_PORT: u16 = 8765;
 const TOKEN_REFRESH_BUFFER_MINUTES: i64 = 5;
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// OAuth Data Structures
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct StravaConfig {
@@ -83,9 +83,9 @@ impl StravaTokens {
   }
 }
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// Error Handling
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, thiserror::Error)]
 pub enum StravaError {
@@ -117,9 +117,9 @@ impl Serialize for StravaError {
   }
 }
 
-/// ---------------------------------------------------------------------------
-/// OAuth URL Generation
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// OAuth URL Generation
+// ---------------------------------------------------------------------------
 
 pub fn build_auth_url(config: &StravaConfig) -> Result<String, StravaError> {
   let mut url = Url::parse(STRAVA_AUTH_URL).map_err(|e| StravaError::OAuth(e.to_string()))?;
@@ -135,9 +135,9 @@ pub fn build_auth_url(config: &StravaConfig) -> Result<String, StravaError> {
   Ok(url.to_string())
 }
 
-/// ---------------------------------------------------------------------------
-/// Token Exchange (Authorization Code -> Tokens)
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Token Exchange (Authorization Code -> Tokens)
+// ---------------------------------------------------------------------------
 
 pub async fn exchange_code_for_tokens(
   config: &StravaConfig,
@@ -168,9 +168,9 @@ pub async fn exchange_code_for_tokens(
   Ok(StravaTokens::from_response(token_response))
 }
 
-/// ---------------------------------------------------------------------------
-/// Token Refresh
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Token Refresh
+// ---------------------------------------------------------------------------
 
 pub async fn refresh_tokens(
   config: &StravaConfig,
@@ -201,9 +201,9 @@ pub async fn refresh_tokens(
   Ok(StravaTokens::from_response(token_response))
 }
 
-/// ---------------------------------------------------------------------------
-/// OAuth Callback Server
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// OAuth Callback Server
+// ---------------------------------------------------------------------------
 
 pub struct CallbackResult {
   pub code: String,
@@ -229,7 +229,7 @@ pub fn wait_for_callback(timeout_seconds: u64) -> Result<CallbackResult, StravaE
     match listener.accept() {
       Ok((mut stream, _)) => {
         let mut buffer = [0; 2048];
-        stream.read(&mut buffer).ok();
+        let _ = stream.read(&mut buffer);
 
         let request = String::from_utf8_lossy(&buffer);
 
@@ -328,9 +328,9 @@ fn build_error_response(error: &str) -> String {
   )
 }
 
-/// ---------------------------------------------------------------------------
-/// Strava API - Activity Fetching
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Strava API - Activity Fetching
+// ---------------------------------------------------------------------------
 
 /// Activity summary from Strava API
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -359,9 +359,9 @@ pub struct StravaActivity {
   pub suffer_score: Option<f64>,
 }
 
-/// ---------------------------------------------------------------------------
-/// Strava API - Activity Streams (time series data)
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Strava API - Activity Streams (time series data)
+// ---------------------------------------------------------------------------
 
 /// Raw stream data from Strava API (array format)
 #[allow(dead_code)]
@@ -622,4 +622,115 @@ pub async fn fetch_activities(
     })?;
 
   Ok(activities)
+}
+
+// ---------------------------------------------------------------------------
+/// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use chrono::Utc;
+
+  // ---------------------------------------------------------------------------
+  // Phase 8: Strava Helper Functions (No HTTP Mocking)
+  // ---------------------------------------------------------------------------
+
+  #[test]
+  fn test_build_auth_url_contains_required_params() {
+    // Arrange
+    let config = StravaConfig {
+      client_id: "12345".to_string(),
+      client_secret: "secret".to_string(),
+      redirect_uri: "http://localhost:8080/callback".to_string(),
+    };
+
+    // Act
+    let url = build_auth_url(&config).expect("Should build URL");
+
+    // Assert: URL should contain all required OAuth params
+    assert!(url.contains("client_id=12345"), "Should contain client_id");
+    assert!(url.contains("redirect_uri="), "Should contain redirect_uri");
+    assert!(url.contains("response_type=code"), "Should use authorization code flow");
+    assert!(url.contains("scope="), "Should request scopes");
+    assert!(url.starts_with("https://www.strava.com/oauth/authorize"), "Should use Strava OAuth endpoint");
+  }
+
+  #[test]
+  fn test_strava_tokens_needs_refresh_when_expired() {
+    // Arrange: Tokens that expired 1 hour ago
+    let tokens = StravaTokens {
+      access_token: "access123".to_string(),
+      refresh_token: "refresh123".to_string(),
+      expires_at: Utc::now() - chrono::Duration::hours(1),
+    };
+
+    // Act & Assert
+    assert!(tokens.needs_refresh(), "Should need refresh when expired");
+  }
+
+  #[test]
+  fn test_strava_tokens_no_refresh_when_valid() {
+    // Arrange: Tokens that expire in 2 hours
+    let tokens = StravaTokens {
+      access_token: "access123".to_string(),
+      refresh_token: "refresh123".to_string(),
+      expires_at: Utc::now() + chrono::Duration::hours(2),
+    };
+
+    // Act & Assert
+    assert!(!tokens.needs_refresh(), "Should NOT need refresh when valid");
+  }
+
+  #[test]
+  fn test_strava_tokens_needs_refresh_near_expiry() {
+    // Arrange: Tokens expiring in 4 minutes (within 5-min buffer)
+    let tokens = StravaTokens {
+      access_token: "access123".to_string(),
+      refresh_token: "refresh123".to_string(),
+      expires_at: Utc::now() + chrono::Duration::minutes(4),
+    };
+
+    // Act & Assert: Should refresh preemptively
+    assert!(
+      tokens.needs_refresh(),
+      "Should need refresh when < 5 min from expiry"
+    );
+  }
+
+  #[test]
+  fn test_workout_samples_is_empty() {
+    // Case 1: Truly empty
+    let empty = WorkoutSamples {
+      hr: vec![],
+      watts: vec![],
+      pace: vec![],
+    };
+    assert!(empty.is_empty(), "Empty samples should return true");
+
+    // Case 2: Has HR data
+    let with_hr = WorkoutSamples {
+      hr: vec![140, 145, 150],
+      watts: vec![],
+      pace: vec![],
+    };
+    assert!(!with_hr.is_empty(), "Samples with HR data should return false");
+
+    // Case 3: Has watts data
+    let with_watts = WorkoutSamples {
+      hr: vec![],
+      watts: vec![200, 205, 210],
+      pace: vec![],
+    };
+    assert!(!with_watts.is_empty(), "Samples with watts data should return false");
+
+    // Case 4: Has pace data
+    let with_pace = WorkoutSamples {
+      hr: vec![],
+      watts: vec![],
+      pace: vec![7.2, 7.3, 7.4],
+    };
+    assert!(!with_pace.is_empty(), "Samples with pace data should return false");
+  }
 }

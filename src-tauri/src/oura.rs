@@ -10,9 +10,9 @@ use std::env;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 
-/// ---------------------------------------------------------------------------
-/// Configuration Constants
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Configuration Constants
+// ---------------------------------------------------------------------------
 
 const OURA_AUTH_URL: &str = "https://cloud.ouraring.com/oauth/authorize";
 const OURA_TOKEN_URL: &str = "https://api.ouraring.com/oauth/token";
@@ -20,9 +20,9 @@ const OURA_API_BASE: &str = "https://api.ouraring.com/v2/usercollection";
 const REDIRECT_PORT: u16 = 8766;  // Different from Strava (8765)
 const TOKEN_REFRESH_BUFFER_MINUTES: i64 = 5;
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// OAuth Data Structures
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct OuraConfig {
@@ -77,9 +77,9 @@ impl OuraTokens {
   }
 }
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// Error Handling
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, thiserror::Error, Serialize, Deserialize)]
 #[serde(tag = "type", content = "message")]
@@ -112,6 +112,7 @@ impl From<reqwest::Error> for OuraError {
 
 /// Oura context for coach analysis (sleep and HRV data only, no proprietary scores)
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct OuraContext {
   // Sleep data (last night)
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -148,25 +149,6 @@ pub struct OuraContext {
   pub resting_hr_trend: Option<String>, // "up", "stable", "down"
 }
 
-impl Default for OuraContext {
-  fn default() -> Self {
-    Self {
-      sleep_duration_hours: None,
-      deep_sleep_hours: None,
-      rem_sleep_hours: None,
-      sleep_efficiency_pct: None,
-      sleep_avg_7d: None,
-      sleep_debt_hours: None,
-      hrv_last_night: None,
-      hrv_avg_7d: None,
-      hrv_trend_direction: None,
-      hrv_declining_days: None,
-      resting_hr: None,
-      resting_hr_avg_7d: None,
-      resting_hr_trend: None,
-    }
-  }
-}
 
 impl OuraContext {
   /// Check if any Oura data is present
@@ -239,9 +221,9 @@ impl OuraContext {
   }
 }
 
-/// ---------------------------------------------------------------------------
-/// OAuth URL Generation
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// OAuth URL Generation
+// ---------------------------------------------------------------------------
 
 pub fn build_auth_url(config: &OuraConfig) -> Result<String, OuraError> {
   let mut url = url::Url::parse(OURA_AUTH_URL)
@@ -257,9 +239,9 @@ pub fn build_auth_url(config: &OuraConfig) -> Result<String, OuraError> {
   Ok(url.to_string())
 }
 
-/// ---------------------------------------------------------------------------
-/// Token Exchange (Authorization Code -> Tokens)
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Token Exchange (Authorization Code -> Tokens)
+// ---------------------------------------------------------------------------
 
 pub async fn exchange_code_for_tokens(
   config: &OuraConfig,
@@ -291,9 +273,9 @@ pub async fn exchange_code_for_tokens(
   Ok(OuraTokens::from_response(token_response))
 }
 
-/// ---------------------------------------------------------------------------
-/// Token Refresh
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Token Refresh
+// ---------------------------------------------------------------------------
 
 pub async fn refresh_tokens(
   config: &OuraConfig,
@@ -324,9 +306,9 @@ pub async fn refresh_tokens(
   Ok(OuraTokens::from_response(token_response))
 }
 
-/// ---------------------------------------------------------------------------
-/// OAuth Callback Server
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// OAuth Callback Server
+// ---------------------------------------------------------------------------
 
 pub struct CallbackResult {
   pub code: String,
@@ -387,9 +369,9 @@ pub fn wait_for_callback() -> Result<CallbackResult, String> {
   Ok(CallbackResult { code })
 }
 
-/// ---------------------------------------------------------------------------
-/// Oura API Data Structures
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Oura API Data Structures
+// ---------------------------------------------------------------------------
 
 /// Daily sleep response from Oura API v2
 #[derive(Debug, Deserialize)]
@@ -443,9 +425,9 @@ pub struct ReadinessContributors {
   pub resting_heart_rate: Option<i64>,  // beats per minute
 }
 
-/// ---------------------------------------------------------------------------
-/// Oura API Data Fetching
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Oura API Data Fetching
+// ---------------------------------------------------------------------------
 
 /// Fetch daily sleep data from Oura API for a date range
 pub async fn fetch_daily_sleep(
@@ -537,9 +519,9 @@ pub async fn fetch_daily_readiness(
   Ok(response.json().await?)
 }
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// Tests
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -605,5 +587,41 @@ mod tests {
     // Current 51 vs avg 50 = +1 = stable
     let result = OuraContext::determine_resting_hr_trend(Some(51), Some(50));
     assert_eq!(result, Some("stable".to_string()));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Phase 8: Oura OAuth Helper Tests
+  // ---------------------------------------------------------------------------
+
+  #[test]
+  fn test_build_oura_auth_url_contains_required_params() {
+    // Arrange
+    let config = OuraConfig {
+      client_id: "oura_client_123".to_string(),
+      client_secret: "oura_secret".to_string(),
+      redirect_uri: "http://localhost:8081/oura/callback".to_string(),
+    };
+
+    // Act
+    let url = build_auth_url(&config).expect("Should build Oura auth URL");
+
+    // Assert: URL should contain all required OAuth params
+    assert!(
+      url.contains("client_id=oura_client_123"),
+      "Should contain client_id"
+    );
+    assert!(url.contains("redirect_uri="), "Should contain redirect_uri");
+    assert!(
+      url.contains("response_type=code"),
+      "Should use authorization code flow"
+    );
+    assert!(
+      url.contains("scope=personal%20daily") || url.contains("scope=personal+daily"),
+      "Should request personal daily scope"
+    );
+    assert!(
+      url.starts_with("https://cloud.ouraring.com/oauth/authorize"),
+      "Should use Oura OAuth endpoint"
+    );
   }
 }

@@ -8,9 +8,9 @@ use serde::Serialize;
 use std::sync::Arc;
 use tauri::State;
 
-/// ---------------------------------------------------------------------------
-/// Start OAuth Flow
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Start OAuth Flow
+// ---------------------------------------------------------------------------
 
 /// Initiates Oura OAuth by returning the authorization URL.
 /// Frontend should open this URL in the default browser.
@@ -23,9 +23,9 @@ pub async fn oura_start_auth() -> Result<String, String> {
   Ok(auth_url)
 }
 
-/// ---------------------------------------------------------------------------
-/// Wait for Callback and Exchange Code
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Wait for Callback and Exchange Code
+// ---------------------------------------------------------------------------
 
 /// Waits for the OAuth callback, exchanges the code for tokens, and stores them.
 /// This should be called immediately after oura_start_auth.
@@ -35,7 +35,7 @@ pub async fn oura_complete_auth(state: State<'_, Arc<AppState>>) -> Result<(), S
     .map_err(|e| e.to_string())?;
 
   // Wait for callback (blocking - runs in Tauri's async runtime)
-  let callback = tokio::task::spawn_blocking(|| wait_for_callback())
+  let callback = tokio::task::spawn_blocking(wait_for_callback)
     .await
     .map_err(|e| e.to_string())?
     .map_err(|e| e.to_string())?;
@@ -52,9 +52,9 @@ pub async fn oura_complete_auth(state: State<'_, Arc<AppState>>) -> Result<(), S
   Ok(())
 }
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// Check Authentication Status
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
 pub struct OuraAuthStatus {
@@ -81,9 +81,9 @@ pub async fn oura_get_auth_status(
   }
 }
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// Disconnect Oura
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[tauri::command]
 pub async fn oura_disconnect(state: State<'_, Arc<AppState>>) -> Result<(), String> {
@@ -96,9 +96,9 @@ pub async fn oura_disconnect(state: State<'_, Arc<AppState>>) -> Result<(), Stri
   Ok(())
 }
 
-/// ---------------------------------------------------------------------------
-/// Token Management (Database Helpers)
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Token Management (Database Helpers)
+// ---------------------------------------------------------------------------
 
 async fn load_tokens(db: &crate::db::DbPool) -> Result<Option<OuraTokens>, String> {
   let row: Option<(String, String, chrono::DateTime<Utc>)> = sqlx::query_as(
@@ -129,7 +129,7 @@ async fn save_tokens(db: &crate::db::DbPool, tokens: &OuraTokens) -> Result<(), 
   )
   .bind(&tokens.access_token)
   .bind(&tokens.refresh_token)
-  .bind(&tokens.expires_at)
+  .bind(tokens.expires_at)
   .execute(db)
   .await
   .map_err(|e| e.to_string())?;
@@ -137,9 +137,9 @@ async fn save_tokens(db: &crate::db::DbPool, tokens: &OuraTokens) -> Result<(), 
   Ok(())
 }
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// Token Refresh
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[tauri::command]
 pub async fn oura_refresh_auth(state: State<'_, Arc<AppState>>) -> Result<(), String> {
@@ -159,9 +159,9 @@ pub async fn oura_refresh_auth(state: State<'_, Arc<AppState>>) -> Result<(), St
   Ok(())
 }
 
-/// ---------------------------------------------------------------------------
-/// Database Helpers for Oura Data
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Database Helpers for Oura Data
+// ---------------------------------------------------------------------------
 
 async fn save_sleep_data(
   db: &crate::db::DbPool,
@@ -242,9 +242,9 @@ async fn save_resting_hr_data(
   Ok(())
 }
 
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 /// Oura Data Sync Command
-/// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
 pub struct OuraSyncResult {
@@ -313,7 +313,7 @@ pub async fn oura_sync_data(
           // Extract date from bedtime_start (ISO timestamp)
           if let Ok(bedtime) = chrono::DateTime::parse_from_rfc3339(&period.bedtime_start) {
             let date = bedtime.date_naive().format("%Y-%m-%d").to_string();
-            hrv_by_date.entry(date).or_insert_with(Vec::new).push(hrv);
+            hrv_by_date.entry(date).or_default().push(hrv);
           }
         }
       }
@@ -354,4 +354,56 @@ pub async fn oura_sync_data(
     hrv_records: hrv_count,
     resting_hr_records: resting_hr_count,
   })
+}
+
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::test_utils::*;
+  use serial_test::serial;
+  use tauri::Manager;
+
+  #[tokio::test]
+  #[serial]
+  async fn test_oura_get_auth_status() {
+    let pool = setup_test_db().await;
+    let state = Arc::new(AppState { db: pool.clone() });
+    let app = tauri::test::mock_app();
+    app.manage(state);
+
+    let result = oura_get_auth_status(app.state()).await;
+    assert!(result.is_ok());
+
+    teardown_test_db(pool).await;
+  }
+
+  #[tokio::test]
+  #[serial]
+  async fn test_oura_disconnect() {
+    let pool = setup_test_db().await;
+    let state = Arc::new(AppState { db: pool.clone() });
+    let app = tauri::test::mock_app();
+    app.manage(state);
+
+    let result = oura_disconnect(app.state()).await;
+    assert!(result.is_ok());
+
+    teardown_test_db(pool).await;
+  }
+
+  #[tokio::test]
+  #[serial]
+  async fn test_oura_sync_no_auth() {
+    let pool = setup_test_db().await;
+    let state = Arc::new(AppState { db: pool.clone() });
+    let app = tauri::test::mock_app();
+    app.manage(state);
+
+    let result = oura_sync_data(app.state()).await;
+    // Should fail due to no auth
+    assert!(result.is_err());
+
+    teardown_test_db(pool).await;
+  }
 }
