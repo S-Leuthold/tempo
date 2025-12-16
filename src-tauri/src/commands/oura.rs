@@ -355,3 +355,25 @@ pub async fn oura_sync_data(
     resting_hr_records: resting_hr_count,
   })
 }
+
+/// ---------------------------------------------------------------------------
+/// Get Recovery Signals
+/// ---------------------------------------------------------------------------
+
+/// Fetch computed recovery signals from Oura data
+/// Returns None if data is stale (>36 hours old) or insufficient
+#[tauri::command]
+pub async fn get_recovery_signals(
+  state: State<'_, Arc<AppState>>,
+) -> Result<Option<crate::models::recovery::RecoverySignals>, String> {
+  const SLEEP_TARGET_HOURS: f64 = 7.0;
+  const MAX_AGE_HOURS: i64 = 36;
+
+  crate::oura::compute_recovery_signals_from_db(
+    &state.db,
+    SLEEP_TARGET_HOURS,
+    MAX_AGE_HOURS,
+  )
+  .await
+  .map_err(|e| e.to_string())
+}

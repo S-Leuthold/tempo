@@ -686,6 +686,10 @@ pub struct ContextPackage {
   #[serde(skip_serializing_if = "Option::is_none")]
   pub oura: Option<crate::oura::OuraContext>,
 
+  /// Recovery signals (deterministic capacity modulators from Oura data)
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub recovery_signals: Option<crate::models::recovery::RecoverySignals>,
+
   /// Progression summary (computed by Rust, explains engine decisions to LLM)
   #[serde(skip_serializing_if = "Option::is_none")]
   pub progression_summary: Option<ProgressionSummary>,
@@ -1056,6 +1060,7 @@ impl ContextPackage {
       user,
       thresholds: SignificanceThresholds::default(),
       oura: None,  // TODO: Fetch from database when Oura is connected
+      recovery_signals: None,  // Set via with_recovery_signals() builder
       progression_summary: None,
     }
   }
@@ -1103,6 +1108,12 @@ impl ContextPackage {
   /// Add progression summary (from Rust progression engine)
   pub fn with_progression_summary(mut self, summary: ProgressionSummary) -> Self {
     self.progression_summary = Some(summary);
+    self
+  }
+
+  /// Add recovery signals (from Oura data)
+  pub fn with_recovery_signals(mut self, signals: crate::models::recovery::RecoverySignals) -> Self {
+    self.recovery_signals = Some(signals);
     self
   }
 

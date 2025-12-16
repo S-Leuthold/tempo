@@ -52,6 +52,7 @@ pub fn run() {
       commands::oura::oura_refresh_auth,
       commands::oura::oura_disconnect,
       commands::oura::oura_sync_data,
+      commands::oura::get_recovery_signals,
       commands::analysis::get_user_settings,
       commands::analysis::update_user_settings,
       commands::analysis::compute_workout_metrics,

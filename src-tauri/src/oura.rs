@@ -607,3 +607,179 @@ mod tests {
     assert_eq!(result, Some("stable".to_string()));
   }
 }
+
+// ## ---------------------------------------------------------------------------
+// ## Database Query Functions for Recovery Signals
+// ## ---------------------------------------------------------------------------
+
+use crate::db::DbPool;
+use crate::models::recovery::{OuraBaseline, OuraDay};
+
+/// Get most recent Oura day with all metrics joined
+pub async fn get_most_recent_oura_day(pool: &DbPool) -> Result<OuraDay, OuraError> {
+  let query = "
+    SELECT
+      COALESCE(s.date, h.date, r.date) as date,
+      CAST(s.total_sleep_seconds AS REAL) / 3600.0 as sleep_hours,
+      h.average_hrv_ms,
+      CAST(r.resting_hr AS REAL) as resting_hr_bpm
+    FROM oura_sleep s
+    LEFT JOIN oura_hrv h ON s.date = h.date
+    LEFT JOIN oura_resting_hr r ON s.date = r.date
+    WHERE s.date IS NOT NULL OR h.date IS NOT NULL OR r.date IS NOT NULL
+    ORDER BY COALESCE(s.date, h.date, r.date) DESC
+    LIMIT 1
+  ";
+
+  sqlx::query_as::<_, (String, Option<f64>, Option<f64>, Option<f64>)>(query)
+    .fetch_one(pool)
+    .await
+    .map(|(date, sleep_hours, hrv_ms, resting_hr_bpm)| OuraDay {
+      date,
+      sleep_duration_hours: sleep_hours,
+      hrv_ms,
+      resting_hr_bpm,
+    })
+    .map_err(|e| OuraError::Database(e.to_string()))
+}
+
+/// Get 7-day Oura history with all metrics joined
+pub async fn get_oura_7d_history(pool: &DbPool) -> Result<Vec<OuraDay>, OuraError> {
+  let query = "
+    WITH recent_dates AS (
+      SELECT DISTINCT date
+      FROM (
+        SELECT date FROM oura_sleep
+        UNION
+        SELECT date FROM oura_hrv
+        UNION
+        SELECT date FROM oura_resting_hr
+      )
+      ORDER BY date DESC
+      LIMIT 7
+    )
+    SELECT
+      d.date,
+      CAST(s.total_sleep_seconds AS REAL) / 3600.0 as sleep_hours,
+      h.average_hrv_ms,
+      CAST(r.resting_hr AS REAL) as resting_hr_bpm
+    FROM recent_dates d
+    LEFT JOIN oura_sleep s ON d.date = s.date
+    LEFT JOIN oura_hrv h ON d.date = h.date
+    LEFT JOIN oura_resting_hr r ON d.date = r.date
+    ORDER BY d.date ASC
+  ";
+
+  sqlx::query_as::<_, (String, Option<f64>, Option<f64>, Option<f64>)>(query)
+    .fetch_all(pool)
+    .await
+    .map(|rows| {
+      rows
+        .into_iter()
+        .map(|(date, sleep_hours, hrv_ms, resting_hr_bpm)| OuraDay {
+          date,
+          sleep_duration_hours: sleep_hours,
+          hrv_ms,
+          resting_hr_bpm,
+        })
+        .collect()
+    })
+    .map_err(|e| OuraError::Database(e.to_string()))
+}
+
+/// Get 28-day baseline averages for sleep, HRV, and resting HR
+pub async fn get_oura_28d_baseline(pool: &DbPool) -> Result<OuraBaseline, OuraError> {
+  // Sleep avg
+  let sleep_avg: Option<f64> = sqlx::query_scalar(
+    "SELECT AVG(CAST(total_sleep_seconds AS REAL)) / 3600.0
+     FROM oura_sleep
+     WHERE date >= date('now', '-28 days')",
+  )
+  .fetch_optional(pool)
+  .await
+  .map_err(|e| OuraError::Database(e.to_string()))?
+  .flatten();
+
+  // HRV avg
+  let hrv_avg: Option<f64> = sqlx::query_scalar(
+    "SELECT AVG(average_hrv_ms)
+     FROM oura_hrv
+     WHERE date >= date('now', '-28 days')",
+  )
+  .fetch_optional(pool)
+  .await
+  .map_err(|e| OuraError::Database(e.to_string()))?
+  .flatten();
+
+  // Resting HR avg
+  let rhr_avg: Option<f64> = sqlx::query_scalar(
+    "SELECT AVG(CAST(resting_hr AS REAL))
+     FROM oura_resting_hr
+     WHERE date >= date('now', '-28 days')",
+  )
+  .fetch_optional(pool)
+  .await
+  .map_err(|e| OuraError::Database(e.to_string()))?
+  .flatten();
+
+  Ok(OuraBaseline {
+    sleep_avg_28d: sleep_avg,
+    hrv_avg_28d: hrv_avg,
+    rhr_avg_28d: rhr_avg,
+  })
+}
+
+/// Check if Oura data is fresh (within specified hours)
+pub async fn is_oura_data_fresh(pool: &DbPool, max_age_hours: i64) -> Result<bool, OuraError> {
+  let query = format!(
+    "SELECT 1
+     FROM (
+       SELECT MAX(date) as latest_date
+       FROM (
+         SELECT MAX(date) as date FROM oura_sleep
+         UNION ALL
+         SELECT MAX(date) as date FROM oura_hrv
+         UNION ALL
+         SELECT MAX(date) as date FROM oura_resting_hr
+       )
+     )
+     WHERE latest_date >= date('now', '-{} hours')",
+    max_age_hours
+  );
+
+  let fresh = sqlx::query_scalar::<_, i32>(&query)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None)
+    .is_some();
+
+  Ok(fresh)
+}
+
+/// Compute recovery signals from Oura database (convenience wrapper)
+/// Returns None if data is stale or incomplete
+pub async fn compute_recovery_signals_from_db(
+  pool: &DbPool,
+  sleep_target: f64,
+  max_age_hours: i64,
+) -> Result<Option<crate::models::recovery::RecoverySignals>, OuraError> {
+  // Check if data is fresh
+  if !is_oura_data_fresh(pool, max_age_hours).await? {
+    return Ok(None);
+  }
+
+  // Fetch all required data
+  let recent = get_most_recent_oura_day(pool).await?;
+  let history = get_oura_7d_history(pool).await?;
+  let baseline = get_oura_28d_baseline(pool).await?;
+
+  // Compute signals
+  let signals = crate::models::recovery::compute_recovery_signals(
+    &recent,
+    &history,
+    &baseline,
+    sleep_target,
+  );
+
+  Ok(Some(signals))
+}

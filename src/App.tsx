@@ -3,7 +3,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import "./App.css";
 import { CoachCards } from "./components/CoachCards";
+import { TabNav } from "./components/TabNav";
+import { RecoveryTab } from "./components/RecoveryTab";
 import type { WorkoutAnalysisV4 } from "./types/analysis";
+import type { RecoverySignals, OuraHistoryPoint } from "./types/recovery";
 
 interface StravaAuthStatus {
   is_authenticated: boolean;
@@ -111,6 +114,7 @@ interface AnalysisResult {
 }
 
 function App() {
+  const [activeTab, setActiveTab] = useState("Dashboard");
   const [stravaStatus, setStravaStatus] = useState<StravaAuthStatus | null>(null);
   const [ouraStatus, setOuraStatus] = useState<OuraAuthStatus | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -129,6 +133,11 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
 
+  // Oura Recovery data state
+  const [recoverySignals, setRecoverySignals] = useState<RecoverySignals | null>(null);
+  const [ouraHistory, setOuraHistory] = useState<OuraHistoryPoint[]>([]);
+  const [isLoadingOura, setIsLoadingOura] = useState(false);
+
   // Form state for settings
   const [maxHrInput, setMaxHrInput] = useState("");
   const [lthrInput, setLthrInput] = useState("");
@@ -141,6 +150,13 @@ function App() {
     loadTrainingContext();
     loadLatestAnalysis();
   }, []);
+
+  // Load Oura data when authenticated
+  useEffect(() => {
+    if (ouraStatus?.is_authenticated) {
+      loadOuraData();
+    }
+  }, [ouraStatus]);
 
   async function checkStravaStatus() {
     try {
@@ -189,6 +205,34 @@ function App() {
       setLatestAnalysis(null);
     } catch (e) {
       console.error("Failed to load latest analysis:", e);
+    }
+  }
+
+  async function loadOuraData() {
+    setIsLoadingOura(true);
+    try {
+      // Fetch computed recovery signals from backend
+      const signals = await invoke<RecoverySignals | null>("get_recovery_signals");
+      setRecoverySignals(signals);
+
+      // Fetch 7-day history for charts
+      // TODO: Add backend command for this if needed, or derive from signals
+      // For now, use mock history data
+      const mockHistory: OuraHistoryPoint[] = [
+        { date: "2025-12-05", sleep_hours: 7.2, hrv: 55, resting_hr: 52 },
+        { date: "2025-12-06", sleep_hours: 6.8, hrv: 48, resting_hr: 54 },
+        { date: "2025-12-07", sleep_hours: 8.1, hrv: 62, resting_hr: 50 },
+        { date: "2025-12-08", sleep_hours: 7.5, hrv: 58, resting_hr: 51 },
+        { date: "2025-12-09", sleep_hours: 6.5, hrv: 45, resting_hr: 55 },
+        { date: "2025-12-10", sleep_hours: 7.8, hrv: 60, resting_hr: 51 },
+        { date: "2025-12-11", sleep_hours: 7.3, hrv: 57, resting_hr: 52 }
+      ];
+      setOuraHistory(mockHistory);
+    } catch (e) {
+      console.error("Failed to load Oura data:", e);
+      setRecoverySignals(null);
+    } finally {
+      setIsLoadingOura(false);
     }
   }
 
@@ -367,6 +411,13 @@ function App() {
     <main className="container">
       <h1>Trainer Log</h1>
       <p className="subtitle">Ambient training coach</p>
+
+      {/* Tab Navigation */}
+      <TabNav activeTab={activeTab} onTabChange={setActiveTab} />
+
+      {/* Dashboard Tab */}
+      {activeTab === "Dashboard" && (
+        <div className="dashboard-content">
 
       {/* Settings Card */}
       <div className="card">
@@ -620,6 +671,27 @@ function App() {
                 )}
               </div>
             ))}
+          </div>
+        </div>
+      )}
+        </div>
+      )}
+
+      {/* Recovery Tab */}
+      {activeTab === "Recovery" && (
+        <RecoveryTab
+          recoverySignals={recoverySignals}
+          ouraHistory={ouraHistory}
+          isLoading={isLoadingOura}
+        />
+      )}
+
+      {/* Training Tab */}
+      {activeTab === "Training" && (
+        <div className="training-content">
+          <div className="card">
+            <h2>Training Progression</h2>
+            <p className="info">Training progression features coming soon...</p>
           </div>
         </div>
       )}

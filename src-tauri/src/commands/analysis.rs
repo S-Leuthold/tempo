@@ -475,6 +475,11 @@ pub async fn analyze_workout(
   // Attach progression summary to context package
   context_package = context_package.with_progression_summary(progression_summary);
 
+  // ## Compute recovery signals from Oura data (if available and fresh) ----------
+  if let Ok(Some(recovery_signals)) = crate::oura::compute_recovery_signals_from_db(&state.db, 7.0, 36).await {
+    context_package = context_package.with_recovery_signals(recovery_signals);
+  }
+
   // Call Claude (V4 format)
   let client = ClaudeClient::from_env()?;
   let context_json = context_package.to_json();
