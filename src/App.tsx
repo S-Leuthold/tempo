@@ -6,7 +6,7 @@ import { CoachCards } from "./components/CoachCards";
 import { TabNav } from "./components/TabNav";
 import { RecoveryTab } from "./components/RecoveryTab";
 import type { WorkoutAnalysisV4 } from "./types/analysis";
-import type { RecoverySignals, OuraHistoryPoint } from "./types/recovery";
+import type { RecoverySignals, OuraDay, OuraHistoryPoint } from "./types/recovery";
 
 interface StravaAuthStatus {
   is_authenticated: boolean;
@@ -156,7 +156,7 @@ function App() {
     if (ouraStatus?.is_authenticated) {
       loadOuraData();
     }
-  }, [ouraStatus]);
+  }, [ouraStatus?.is_authenticated]);
 
   async function checkStravaStatus() {
     try {
@@ -215,22 +215,22 @@ function App() {
       const signals = await invoke<RecoverySignals | null>("get_recovery_signals");
       setRecoverySignals(signals);
 
-      // Fetch 7-day history for charts
-      // TODO: Add backend command for this if needed, or derive from signals
-      // For now, use mock history data
-      const mockHistory: OuraHistoryPoint[] = [
-        { date: "2025-12-05", sleep_hours: 7.2, hrv: 55, resting_hr: 52 },
-        { date: "2025-12-06", sleep_hours: 6.8, hrv: 48, resting_hr: 54 },
-        { date: "2025-12-07", sleep_hours: 8.1, hrv: 62, resting_hr: 50 },
-        { date: "2025-12-08", sleep_hours: 7.5, hrv: 58, resting_hr: 51 },
-        { date: "2025-12-09", sleep_hours: 6.5, hrv: 45, resting_hr: 55 },
-        { date: "2025-12-10", sleep_hours: 7.8, hrv: 60, resting_hr: 51 },
-        { date: "2025-12-11", sleep_hours: 7.3, hrv: 57, resting_hr: 52 }
-      ];
-      setOuraHistory(mockHistory);
+      // Fetch 7-day history for charts from backend
+      const ouraHistory = await invoke<OuraDay[]>("get_oura_history");
+
+      // Convert OuraDay to OuraHistoryPoint format for charts
+      const historyPoints: OuraHistoryPoint[] = ouraHistory.map(day => ({
+        date: day.date,
+        sleep_hours: day.sleep_duration_hours,
+        hrv: day.hrv_ms,
+        resting_hr: day.resting_hr_bpm
+      }));
+
+      setOuraHistory(historyPoints);
     } catch (e) {
       console.error("Failed to load Oura data:", e);
       setRecoverySignals(null);
+      setOuraHistory([]);
     } finally {
       setIsLoadingOura(false);
     }

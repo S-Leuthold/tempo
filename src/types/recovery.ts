@@ -28,6 +28,14 @@ export interface OuraHistoryPoint {
   resting_hr?: number;
 }
 
+// OuraDay from backend (matches Rust struct)
+export interface OuraDay {
+  date: string;
+  sleep_duration_hours?: number;
+  hrv_ms?: number;
+  resting_hr_bpm?: number;
+}
+
 // ## ---------------------------------------------------------------------------
 // ## Recovery Signals Types (Deterministic Capacity Modulators)
 // ## ---------------------------------------------------------------------------

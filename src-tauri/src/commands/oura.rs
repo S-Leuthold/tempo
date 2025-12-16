@@ -377,3 +377,13 @@ pub async fn get_recovery_signals(
   .await
   .map_err(|e| e.to_string())
 }
+
+/// Fetch 7-day Oura history for chart visualization
+#[tauri::command]
+pub async fn get_oura_history(
+  state: State<'_, Arc<AppState>>,
+) -> Result<Vec<crate::models::recovery::OuraDay>, String> {
+  crate::oura::get_oura_7d_history(&state.db)
+    .await
+    .map_err(|e| e.to_string())
+}

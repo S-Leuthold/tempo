@@ -100,7 +100,7 @@ pub enum RecoveryFlag {
 // ## Helper Data Structures
 // ## ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OuraDay {
   pub date: String,
   pub sleep_duration_hours: Option<f64>,
@@ -108,7 +108,7 @@ pub struct OuraDay {
   pub resting_hr_bpm: Option<f64>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OuraBaseline {
   pub sleep_avg_28d: Option<f64>,
   pub hrv_avg_28d: Option<f64>,
@@ -142,6 +142,7 @@ pub fn compute_linear_slope(values: &[(f64, f64)]) -> Option<f64> {
 }
 
 /// Compute standard deviation
+#[allow(dead_code)]
 pub fn compute_std_dev(values: &[f64]) -> Option<f64> {
   if values.is_empty() {
     return None;
@@ -546,15 +547,11 @@ pub fn compute_recovery_signals(
   }
 
   // Check for multi-day decline (HRV declining 3+ days or RHR rising 3+ days)
-  if let Some(days) = hrv.consecutive_declining_days {
-    if days >= 3 {
-      flags.push(RecoveryFlag::MultiDayDecline);
-    }
-  }
-  if let Some(days) = rhr.consecutive_declining_days {
-    if days >= 3 {
-      flags.push(RecoveryFlag::MultiDayDecline);
-    }
+  let has_multi_day_decline = hrv.consecutive_declining_days.map_or(false, |days| days >= 3)
+    || rhr.consecutive_declining_days.map_or(false, |days| days >= 3);
+
+  if has_multi_day_decline {
+    flags.push(RecoveryFlag::MultiDayDecline);
   }
 
   RecoverySignals {

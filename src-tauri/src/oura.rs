@@ -687,50 +687,37 @@ pub async fn get_oura_7d_history(pool: &DbPool) -> Result<Vec<OuraDay>, OuraErro
     .map_err(|e| OuraError::Database(e.to_string()))
 }
 
-/// Get 28-day baseline averages for sleep, HRV, and resting HR
+/// Get 28-day baseline averages for sleep, HRV, and resting HR (single query)
 pub async fn get_oura_28d_baseline(pool: &DbPool) -> Result<OuraBaseline, OuraError> {
-  // Sleep avg
-  let sleep_avg: Option<f64> = sqlx::query_scalar(
-    "SELECT AVG(CAST(total_sleep_seconds AS REAL)) / 3600.0
-     FROM oura_sleep
-     WHERE date >= date('now', '-28 days')",
-  )
-  .fetch_optional(pool)
-  .await
-  .map_err(|e| OuraError::Database(e.to_string()))?
-  .flatten();
+  let query = "
+    SELECT
+      (SELECT AVG(CAST(total_sleep_seconds AS REAL)) / 3600.0
+       FROM oura_sleep
+       WHERE date >= date('now', '-28 days')) as sleep_avg,
+      (SELECT AVG(average_hrv_ms)
+       FROM oura_hrv
+       WHERE date >= date('now', '-28 days')) as hrv_avg,
+      (SELECT AVG(CAST(resting_hr AS REAL))
+       FROM oura_resting_hr
+       WHERE date >= date('now', '-28 days')) as rhr_avg
+  ";
 
-  // HRV avg
-  let hrv_avg: Option<f64> = sqlx::query_scalar(
-    "SELECT AVG(average_hrv_ms)
-     FROM oura_hrv
-     WHERE date >= date('now', '-28 days')",
-  )
-  .fetch_optional(pool)
-  .await
-  .map_err(|e| OuraError::Database(e.to_string()))?
-  .flatten();
-
-  // Resting HR avg
-  let rhr_avg: Option<f64> = sqlx::query_scalar(
-    "SELECT AVG(CAST(resting_hr AS REAL))
-     FROM oura_resting_hr
-     WHERE date >= date('now', '-28 days')",
-  )
-  .fetch_optional(pool)
-  .await
-  .map_err(|e| OuraError::Database(e.to_string()))?
-  .flatten();
-
-  Ok(OuraBaseline {
-    sleep_avg_28d: sleep_avg,
-    hrv_avg_28d: hrv_avg,
-    rhr_avg_28d: rhr_avg,
-  })
+  sqlx::query_as::<_, (Option<f64>, Option<f64>, Option<f64>)>(query)
+    .fetch_one(pool)
+    .await
+    .map(|(sleep_avg, hrv_avg, rhr_avg)| OuraBaseline {
+      sleep_avg_28d: sleep_avg,
+      hrv_avg_28d: hrv_avg,
+      rhr_avg_28d: rhr_avg,
+    })
+    .map_err(|e| OuraError::Database(e.to_string()))
 }
 
 /// Check if Oura data is fresh (within specified hours)
 pub async fn is_oura_data_fresh(pool: &DbPool, max_age_hours: i64) -> Result<bool, OuraError> {
+  // Convert hours to days (round up to ensure we include the target day)
+  let max_age_days = (max_age_hours + 23) / 24;
+
   let query = format!(
     "SELECT 1
      FROM (
@@ -743,17 +730,16 @@ pub async fn is_oura_data_fresh(pool: &DbPool, max_age_hours: i64) -> Result<boo
          SELECT MAX(date) as date FROM oura_resting_hr
        )
      )
-     WHERE latest_date >= date('now', '-{} hours')",
-    max_age_hours
+     WHERE latest_date >= date('now', '-{} days')",
+    max_age_days
   );
 
-  let fresh = sqlx::query_scalar::<_, i32>(&query)
+  let result = sqlx::query_scalar::<_, i32>(&query)
     .fetch_optional(pool)
     .await
-    .unwrap_or(None)
-    .is_some();
+    .map_err(|e| OuraError::Database(e.to_string()))?;
 
-  Ok(fresh)
+  Ok(result.is_some())
 }
 
 /// Compute recovery signals from Oura database (convenience wrapper)
@@ -772,6 +758,21 @@ pub async fn compute_recovery_signals_from_db(
   let recent = get_most_recent_oura_day(pool).await?;
   let history = get_oura_7d_history(pool).await?;
   let baseline = get_oura_28d_baseline(pool).await?;
+
+  // ## Validate completeness before computing -----------------------------------
+  // Require at least one current metric AND at least one baseline metric
+  // to avoid returning optimistic "Green" with all None values
+  let has_current_metric = recent.sleep_duration_hours.is_some()
+    || recent.hrv_ms.is_some()
+    || recent.resting_hr_bpm.is_some();
+
+  let has_baseline_metric = baseline.sleep_avg_28d.is_some()
+    || baseline.hrv_avg_28d.is_some()
+    || baseline.rhr_avg_28d.is_some();
+
+  if !has_current_metric || !has_baseline_metric {
+    return Ok(None);  // Data incomplete, skip signal computation
+  }
 
   // Compute signals
   let signals = crate::models::recovery::compute_recovery_signals(
