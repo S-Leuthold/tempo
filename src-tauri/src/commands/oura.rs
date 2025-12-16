@@ -35,7 +35,7 @@ pub async fn oura_complete_auth(state: State<'_, Arc<AppState>>) -> Result<(), S
     .map_err(|e| e.to_string())?;
 
   // Wait for callback (blocking - runs in Tauri's async runtime)
-  let callback = tokio::task::spawn_blocking(|| wait_for_callback())
+  let callback = tokio::task::spawn_blocking(wait_for_callback)
     .await
     .map_err(|e| e.to_string())?
     .map_err(|e| e.to_string())?;
@@ -129,7 +129,7 @@ async fn save_tokens(db: &crate::db::DbPool, tokens: &OuraTokens) -> Result<(), 
   )
   .bind(&tokens.access_token)
   .bind(&tokens.refresh_token)
-  .bind(&tokens.expires_at)
+  .bind(tokens.expires_at)
   .execute(db)
   .await
   .map_err(|e| e.to_string())?;
@@ -313,7 +313,7 @@ pub async fn oura_sync_data(
           // Extract date from bedtime_start (ISO timestamp)
           if let Ok(bedtime) = chrono::DateTime::parse_from_rfc3339(&period.bedtime_start) {
             let date = bedtime.date_naive().format("%Y-%m-%d").to_string();
-            hrv_by_date.entry(date).or_insert_with(Vec::new).push(hrv);
+            hrv_by_date.entry(date).or_default().push(hrv);
           }
         }
       }
