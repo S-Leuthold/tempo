@@ -111,7 +111,7 @@ impl From<reqwest::Error> for OuraError {
 }
 
 /// Oura context for coach analysis (sleep and HRV data only, no proprietary scores)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct OuraContext {
   // Sleep data (last night)
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -146,26 +146,6 @@ pub struct OuraContext {
   pub resting_hr_avg_7d: Option<i64>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub resting_hr_trend: Option<String>, // "up", "stable", "down"
-}
-
-impl Default for OuraContext {
-  fn default() -> Self {
-    Self {
-      sleep_duration_hours: None,
-      deep_sleep_hours: None,
-      rem_sleep_hours: None,
-      sleep_efficiency_pct: None,
-      sleep_avg_7d: None,
-      sleep_debt_hours: None,
-      hrv_last_night: None,
-      hrv_avg_7d: None,
-      hrv_trend_direction: None,
-      hrv_declining_days: None,
-      resting_hr: None,
-      resting_hr_avg_7d: None,
-      resting_hr_trend: None,
-    }
-  }
 }
 
 impl OuraContext {

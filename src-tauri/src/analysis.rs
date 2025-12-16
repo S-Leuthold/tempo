@@ -530,7 +530,7 @@ impl TrainingFlags {
 
     let has_long_run = days_21.iter().any(|w| {
       w.activity_type.to_lowercase() == "run"
-        && w.duration_seconds.map_or(false, |d| d >= long_run_threshold_secs)
+        && w.duration_seconds.is_some_and(|d| d >= long_run_threshold_secs)
     });
     if !has_long_run && days_21.iter().any(|w| w.activity_type.to_lowercase() == "run") {
       flags.long_run_gap = true;
@@ -547,7 +547,7 @@ impl TrainingFlags {
 
     let has_long_ride = days_21.iter().any(|w| {
       w.activity_type.to_lowercase() == "ride"
-        && w.duration_seconds.map_or(false, |d| d >= long_ride_threshold_secs)
+        && w.duration_seconds.is_some_and(|d| d >= long_ride_threshold_secs)
     });
     if !has_long_ride && days_21.iter().any(|w| w.activity_type.to_lowercase() == "ride") {
       flags.long_ride_gap = true;
@@ -697,6 +697,7 @@ pub struct ContextPackage {
 
 /// Workout structure metadata (for structured workouts like TrainerRoad)
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct WorkoutStructure {
   pub is_structured: bool,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -705,15 +706,6 @@ pub struct WorkoutStructure {
   pub prescribed_target_watts: Option<f64>,
 }
 
-impl Default for WorkoutStructure {
-  fn default() -> Self {
-    Self {
-      is_structured: false,
-      block_type: None,
-      prescribed_target_watts: None,
-    }
-  }
-}
 
 /// Workout-specific context for the LLM
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -859,7 +851,7 @@ impl FatigueContext {
       .iter()
       .filter(|w| {
         let days_ago = (now - w.started_at).num_days();
-        days_ago >= 7 && days_ago < 14
+        (7..14).contains(&days_ago)
       })
       .collect();
 
@@ -1070,7 +1062,7 @@ impl ContextPackage {
     use chrono::{Datelike, Duration, Weekday};
 
     let today = workout_date.weekday();
-    let tomorrow = (workout_date.clone() + Duration::days(1)).weekday();
+    let tomorrow = (*workout_date + Duration::days(1)).weekday();
 
     let day_name = |w: Weekday| -> String {
       match w {

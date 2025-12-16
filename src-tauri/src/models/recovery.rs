@@ -547,8 +547,8 @@ pub fn compute_recovery_signals(
   }
 
   // Check for multi-day decline (HRV declining 3+ days or RHR rising 3+ days)
-  let has_multi_day_decline = hrv.consecutive_declining_days.map_or(false, |days| days >= 3)
-    || rhr.consecutive_declining_days.map_or(false, |days| days >= 3);
+  let has_multi_day_decline = hrv.consecutive_declining_days.is_some_and(|days| days >= 3)
+    || rhr.consecutive_declining_days.is_some_and(|days| days >= 3);
 
   if has_multi_day_decline {
     flags.push(RecoveryFlag::MultiDayDecline);

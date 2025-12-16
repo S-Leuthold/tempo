@@ -149,7 +149,7 @@ async fn save_tokens(db: &crate::db::DbPool, tokens: &StravaTokens) -> Result<()
   )
   .bind(&tokens.access_token)
   .bind(&tokens.refresh_token)
-  .bind(&tokens.expires_at)
+  .bind(tokens.expires_at)
   .execute(db)
   .await
   .map_err(|e| StravaError::Database(e.to_string()))?;
@@ -272,7 +272,7 @@ async fn save_activity(
   )
   .bind(activity.id.to_string())
   .bind(&activity.activity_type)
-  .bind(&activity.start_date)
+  .bind(activity.start_date)
   .bind(activity.moving_time)
   .bind(activity.distance)
   .bind(activity.total_elevation_gain)

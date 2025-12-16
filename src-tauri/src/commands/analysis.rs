@@ -823,7 +823,7 @@ async fn compute_adherence(
     .iter()
     .filter(|(activity_type, duration)| {
       activity_type.to_lowercase() == "run"
-        && duration.map_or(false, |d| d > 45 * 60) // > 45 min
+        && duration.is_some_and(|d| d > 45 * 60) // > 45 min
     })
     .count() as u8;
 

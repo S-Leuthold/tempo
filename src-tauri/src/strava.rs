@@ -229,7 +229,7 @@ pub fn wait_for_callback(timeout_seconds: u64) -> Result<CallbackResult, StravaE
     match listener.accept() {
       Ok((mut stream, _)) => {
         let mut buffer = [0; 2048];
-        stream.read(&mut buffer).ok();
+        let _ = stream.read(&mut buffer).ok();
 
         let request = String::from_utf8_lossy(&buffer);
 

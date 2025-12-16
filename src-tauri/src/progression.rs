@@ -38,21 +38,16 @@ pub enum DimensionType {
 /// Lifecycle Status: Where are we in the progression journey
 /// ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LifecycleStatus {
     /// current < ceiling, working toward goal
+    #[default]
     Building,
     /// current == ceiling, maintaining capability
     AtCeiling,
     /// Detraining detected, stepping back to rebuild
     Regressing,
-}
-
-impl Default for LifecycleStatus {
-    fn default() -> Self {
-        Self::Building
-    }
 }
 
 impl std::fmt::Display for LifecycleStatus {
@@ -487,7 +482,7 @@ impl ProgressionSummary {
             Self::check_criteria(&dim.name, dim, context, flags);
 
         // Apply overlap rule: if another dimension progressed in last 7 days, hold
-        let overlap_blocked = last_prog_dim.as_ref().map_or(false, |last| {
+        let overlap_blocked = last_prog_dim.as_ref().is_some_and(|last| {
             last != &dim.name && days_since_any < 7
         });
 
@@ -586,9 +581,9 @@ impl ProgressionSummary {
 
         // Fatigue thresholds vary by dimension
         let (fatigue_low, fatigue_threshold) = match name {
-            "run_interval" => (context.tsb.map_or(true, |t| t > -15.0), -15.0),
-            "long_run" => (context.tsb.map_or(true, |t| t > -15.0), -15.0),
-            _ => (context.tsb.map_or(true, |t| t > -10.0), -10.0),
+            "run_interval" => (context.tsb.is_none_or(|t| t > -15.0), -15.0),
+            "long_run" => (context.tsb.is_none_or(|t| t > -15.0), -15.0),
+            _ => (context.tsb.is_none_or(|t| t > -10.0), -10.0),
         };
 
         // HR stability matters more for run intervals
