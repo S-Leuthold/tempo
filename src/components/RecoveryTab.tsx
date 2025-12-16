@@ -165,7 +165,7 @@ interface SignalCardProps {
 }
 
 function SignalCard({ title, icon, axis, unit, showDebt, history, chartType }: SignalCardProps) {
-  const getDeltaClass = (delta?: number, inverse = false): string => {
+  const getDeltaClass = (delta?: number): string => {
     if (!delta) return 'neutral';
     const threshold = 2;
     if (Math.abs(delta) < threshold) return 'neutral';
