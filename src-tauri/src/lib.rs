@@ -1,11 +1,11 @@
 mod analysis;
 mod db;
 mod llm;
-mod models;
+pub mod models;
 mod commands;
 mod progression;
 mod strava;
-mod oura;
+pub mod oura;
 
 use db::AppState;
 use std::sync::Arc;
