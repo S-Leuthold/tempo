@@ -350,6 +350,11 @@ mod tests {
     let result = strava_get_auth_status(app.state()).await;
     assert!(result.is_ok());
 
+    let status = result.unwrap();
+    assert_eq!(status.is_authenticated, false, "Should not be authenticated with no tokens");
+    assert_eq!(status.expires_at, None, "expires_at should be None when not authenticated");
+    assert_eq!(status.needs_refresh, false, "needs_refresh should be false when not authenticated");
+
     teardown_test_db(pool).await;
   }
 
@@ -364,6 +369,18 @@ mod tests {
     let result = strava_disconnect(app.state()).await;
     assert!(result.is_ok());
 
+    // Verify tokens were removed from sync_state
+    let (access_token, refresh_token): (Option<String>, Option<String>) = sqlx::query_as(
+      "SELECT access_token, refresh_token FROM sync_state WHERE source = 'strava'"
+    )
+    .fetch_optional(&pool)
+    .await
+    .expect("Failed to query sync_state")
+    .unwrap_or((None, None));
+
+    assert_eq!(access_token, None, "access_token should be NULL after disconnect");
+    assert_eq!(refresh_token, None, "refresh_token should be NULL after disconnect");
+
     teardown_test_db(pool).await;
   }
 
@@ -376,8 +393,20 @@ mod tests {
     app.manage(state);
 
     let result = strava_sync_activities(app.state()).await;
-    // Should fail due to no auth
-    assert!(result.is_err());
+    assert!(result.is_err(), "Sync should fail when not authenticated");
+
+    // Verify the error is specifically NotAuthenticated
+    match result {
+      Err(StravaError::NotAuthenticated) => {
+        // Expected error type
+      }
+      Err(other) => {
+        panic!("Expected StravaError::NotAuthenticated, got {:?}", other);
+      }
+      Ok(_) => {
+        panic!("Expected error, got success");
+      }
+    }
 
     teardown_test_db(pool).await;
   }

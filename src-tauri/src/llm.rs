@@ -1175,7 +1175,8 @@ Hope that helps!"#;
     let json = extracted.unwrap();
     assert!(json.contains("//"), "Comments should be in extracted JSON");
 
-    let parse_result: Result<PerformanceCard, _> = serde_json::from_str(&json);
+    // Parse to generic Value instead of PerformanceCard
+    let parse_result: Result<serde_json::Value, _> = serde_json::from_str(&json);
     assert!(
       parse_result.is_err(),
       "JSON with comments should fail to parse"

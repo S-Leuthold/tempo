@@ -1618,14 +1618,10 @@ mod tests {
     let flags = TrainingFlags::compute(&workouts, &context, &settings, &dimensions);
 
     // Assert: Volume spike should be detected
-    // ATL = 6 × 70 = 420
-    // CTL = (18 × 40) / 42 ≈ 17.14
-    // Chronic weekly = 17.14 × 7 = 120
-    // Spike threshold = 120 × 1.2 = 144
-    // 420 > 144 → spike detected
+    // Acute load this week is significantly higher than chronic baseline
     assert!(
       flags.volume_spike,
-      "Volume spike should be detected (ATL=420 vs chronic weekly ~120)"
+      "Volume spike should be detected: 6 high-load workouts this week vs 3/week baseline"
     );
   }
 

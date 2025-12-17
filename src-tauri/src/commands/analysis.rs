@@ -862,12 +862,30 @@ mod tests {
   #[serial]
   async fn test_update_user_settings() {
     let pool = setup_test_db().await;
+
+    // Seed initial settings
+    seed_test_user_settings(&pool).await;
+
     let state = Arc::new(AppState { db: pool.clone() });
     let app = tauri::test::mock_app();
     app.manage(state);
 
-    let result = update_user_settings(app.state(), Some(190), Some(170), Some(250), Some(6)).await;
+    // Update with new values
+    let result = update_user_settings(app.state(), Some(195), Some(175), Some(260), Some(5)).await;
     assert!(result.is_ok());
+
+    // Read back from DB and verify values changed
+    let updated: (Option<i64>, Option<i64>, Option<i64>, i64) = sqlx::query_as(
+      "SELECT max_hr, lthr, ftp, training_days_per_week FROM user_settings WHERE id = 1"
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("Failed to fetch updated settings");
+
+    assert_eq!(updated.0, Some(195), "max_hr should be updated to 195");
+    assert_eq!(updated.1, Some(175), "lthr should be updated to 175");
+    assert_eq!(updated.2, Some(260), "ftp should be updated to 260");
+    assert_eq!(updated.3, 5, "training_days_per_week should be updated to 5");
 
     teardown_test_db(pool).await;
   }
@@ -891,12 +909,33 @@ mod tests {
   async fn test_compute_workout_metrics() {
     let pool = setup_test_db().await;
     seed_test_user_settings(&pool).await;
+
+    // Seed some workouts
+    let workout_ids = seed_test_workouts(&pool, 5).await;
+
     let state = Arc::new(AppState { db: pool.clone() });
     let app = tauri::test::mock_app();
     app.manage(state);
 
     let result = compute_workout_metrics(app.state()).await;
     assert!(result.is_ok());
+
+    // Verify metrics_computed_at was set for workouts
+    for workout_id in workout_ids {
+      let computed_at: Option<String> = sqlx::query_scalar(
+        "SELECT metrics_computed_at FROM workouts WHERE id = ?"
+      )
+      .bind(workout_id)
+      .fetch_one(&pool)
+      .await
+      .expect("Failed to fetch workout");
+
+      assert!(
+        computed_at.is_some(),
+        "metrics_computed_at should be set for workout {}",
+        workout_id
+      );
+    }
 
     teardown_test_db(pool).await;
   }
@@ -905,12 +944,36 @@ mod tests {
   #[serial]
   async fn test_get_workouts_with_metrics() {
     let pool = setup_test_db().await;
+    seed_test_user_settings(&pool).await;
+
+    // Seed workouts and compute their metrics
+    let workout_ids = seed_test_workouts(&pool, 3).await;
+
     let state = Arc::new(AppState { db: pool.clone() });
     let app = tauri::test::mock_app();
-    app.manage(state);
+    app.manage(state.clone());
 
+    // First compute metrics
+    compute_workout_metrics(app.state()).await.expect("Failed to compute metrics");
+
+    // Now fetch workouts with metrics
     let result = get_workouts_with_metrics(app.state(), Some(10)).await;
     assert!(result.is_ok());
+
+    let workouts = result.unwrap();
+    assert_eq!(
+      workouts.len(),
+      3,
+      "Should return 3 workouts with computed metrics"
+    );
+
+    // Verify each workout has metrics_computed_at set
+    for workout in workouts {
+      assert!(
+        workout_ids.contains(&workout.id),
+        "Returned workout should be one we seeded"
+      );
+    }
 
     teardown_test_db(pool).await;
   }

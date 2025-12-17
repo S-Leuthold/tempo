@@ -86,8 +86,14 @@ mod tests {
     app.manage(state);
 
     let result = get_progression_dimensions(app.state()).await;
-    // Just verify the command executes
-    assert!(result.is_ok() || result.is_err());
+    assert!(result.is_ok());
+
+    let dimensions = result.unwrap();
+    assert_eq!(
+      dimensions.len(),
+      3,
+      "Should return 3 seeded progression dimensions"
+    );
 
     teardown_test_db(pool).await;
   }
@@ -103,8 +109,12 @@ mod tests {
     app.manage(state);
 
     let result = get_progression_dimension(app.state(), "long_run".to_string()).await;
-    // Just verify the command executes
-    assert!(result.is_ok() || result.is_err());
+    assert!(result.is_ok());
+
+    let dimension = result.unwrap();
+    assert_eq!(dimension.name, "long_run", "Should return the long_run dimension");
+    assert_eq!(dimension.current_value, "30", "Current value should be 30");
+    assert_eq!(dimension.ceiling_value, "90", "Ceiling value should be 90");
 
     teardown_test_db(pool).await;
   }
@@ -134,9 +144,22 @@ mod tests {
     let app = tauri::test::mock_app();
     app.manage(state);
 
+    // run_interval is seeded as "building" with current_value "4:1" and sequence progression
     let result = progress_dimension(app.state(), "run_interval".to_string(), None).await;
-    // May succeed or fail depending on criteria, just verify it responds
-    assert!(result.is_ok() || result.is_err());
+    assert!(result.is_ok(), "Progress should succeed for run_interval in building state");
+
+    // Verify dimension progressed in DB
+    let dimension: (String,) = sqlx::query_as(
+      "SELECT current_value FROM progression_dimensions WHERE name = 'run_interval'"
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("Failed to fetch dimension");
+
+    assert_eq!(
+      dimension.0, "5:1",
+      "run_interval should progress from 4:1 to 5:1"
+    );
 
     teardown_test_db(pool).await;
   }
@@ -151,8 +174,22 @@ mod tests {
     let app = tauri::test::mock_app();
     app.manage(state);
 
+    // long_run is seeded with current_value "30" and increment of 5
     let result = regress_dimension(app.state(), "long_run".to_string()).await;
-    assert!(result.is_ok() || result.is_err());
+    assert!(result.is_ok(), "Regression should succeed for long_run");
+
+    // Verify dimension regressed in DB
+    let dimension: (String,) = sqlx::query_as(
+      "SELECT current_value FROM progression_dimensions WHERE name = 'long_run'"
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("Failed to fetch dimension");
+
+    assert_eq!(
+      dimension.0, "25",
+      "long_run should regress from 30 to 25"
+    );
 
     teardown_test_db(pool).await;
   }
@@ -167,9 +204,22 @@ mod tests {
     let app = tauri::test::mock_app();
     app.manage(state);
 
+    // z2_ride is seeded as "at_ceiling" so touch should succeed
     let result = touch_ceiling(app.state(), "z2_ride".to_string()).await;
-    // Verify command executes (may fail if not at ceiling)
-    assert!(result.is_ok() || result.is_err());
+    assert!(result.is_ok(), "touch_ceiling should succeed for z2_ride which is at_ceiling");
+
+    // Verify last_ceiling_touch_at was updated in DB
+    let last_touch: Option<String> = sqlx::query_scalar(
+      "SELECT last_ceiling_touch_at FROM progression_dimensions WHERE name = 'z2_ride'"
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("Failed to fetch dimension");
+
+    assert!(
+      last_touch.is_some(),
+      "last_ceiling_touch_at should be set after touching ceiling"
+    );
 
     teardown_test_db(pool).await;
   }
@@ -185,8 +235,20 @@ mod tests {
     app.manage(state);
 
     let result = set_dimension_ceiling(app.state(), "long_run".to_string(), "120".to_string()).await;
-    // Verify command executes
-    assert!(result.is_ok() || result.is_err());
+    assert!(result.is_ok(), "set_dimension_ceiling should succeed");
+
+    // Verify ceiling_value was updated in DB
+    let dimension: (String,) = sqlx::query_as(
+      "SELECT ceiling_value FROM progression_dimensions WHERE name = 'long_run'"
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("Failed to fetch dimension");
+
+    assert_eq!(
+      dimension.0, "120",
+      "ceiling_value should be updated to 120"
+    );
 
     teardown_test_db(pool).await;
   }

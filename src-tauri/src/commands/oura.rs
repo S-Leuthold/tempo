@@ -375,6 +375,11 @@ mod tests {
     let result = oura_get_auth_status(app.state()).await;
     assert!(result.is_ok());
 
+    let status = result.unwrap();
+    assert_eq!(status.is_authenticated, false, "Should not be authenticated with no tokens");
+    assert_eq!(status.expires_at, None, "expires_at should be None when not authenticated");
+    assert_eq!(status.needs_refresh, false, "needs_refresh should be false when not authenticated");
+
     teardown_test_db(pool).await;
   }
 
@@ -388,6 +393,14 @@ mod tests {
 
     let result = oura_disconnect(app.state()).await;
     assert!(result.is_ok());
+
+    // Verify tokens were removed from DB
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM oura_auth")
+      .fetch_one(&pool)
+      .await
+      .expect("Failed to query oura_auth");
+
+    assert_eq!(count, 0, "oura_auth table should be empty after disconnect");
 
     teardown_test_db(pool).await;
   }
