@@ -392,18 +392,22 @@ pub struct SleepContributors {
   pub sleep_efficiency: Option<i64>, // percentage (0-100)
 }
 
-/// Sleep periods response (contains HRV data)
+/// Sleep periods response (contains actual sleep durations and HRV data)
 #[derive(Debug, Deserialize)]
 pub struct SleepPeriodsResponse {
   pub data: Vec<SleepPeriod>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct SleepPeriod {
   pub bedtime_start: String,  // ISO timestamp
   pub bedtime_end: String,    // ISO timestamp
   pub average_hrv: Option<f64>, // HRV in milliseconds
+  pub total_sleep_duration: Option<i64>,  // Actual sleep duration in seconds
+  pub deep_sleep_duration: Option<i64>,   // Deep sleep in seconds
+  pub rem_sleep_duration: Option<i64>,    // REM sleep in seconds
+  pub light_sleep_duration: Option<i64>,  // Light sleep in seconds
+  pub sleep_efficiency: Option<i64>,      // Efficiency percentage (0-100)
 }
 
 /// Daily readiness response (contains resting HR)

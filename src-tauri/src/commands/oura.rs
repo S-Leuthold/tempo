@@ -287,44 +287,83 @@ pub async fn oura_sync_data(
   let mut hrv_count = 0;
   let mut resting_hr_count = 0;
 
-  // Fetch daily sleep data
-  match fetch_daily_sleep(&tokens.access_token, &start_str, &end_str).await {
-    Ok(response) => {
-      println!("DEBUG: Received {} sleep records from Oura API", response.data.len());
-      for sleep_data in response.data {
-        println!("DEBUG: Sleep for {}: total={}s, deep={}s, rem={}s, light={}s",
-          sleep_data.day,
-          sleep_data.contributors.total_sleep.unwrap_or(0),
-          sleep_data.contributors.deep_sleep.unwrap_or(0),
-          sleep_data.contributors.rem_sleep.unwrap_or(0),
-          sleep_data.contributors.light_sleep.unwrap_or(0)
-        );
-        save_sleep_data(&state.db, &sleep_data.day, &sleep_data).await?;
-        sleep_count += 1;
-      }
-      println!("Saved {} sleep records", sleep_count);
-    }
-    Err(e) => {
-      eprintln!("Failed to fetch sleep data: {}", e);
-    }
-  }
-
-  // Fetch sleep periods for HRV data
+  // Fetch sleep periods (contains BOTH actual sleep duration AND HRV)
+  // Note: daily_sleep endpoint has "contributors" which are scores (0-100), NOT durations
   match fetch_sleep_periods(&tokens.access_token, &start_str, &end_str).await {
     Ok(response) => {
-      // Group periods by date and average HRV for each day
-      let mut hrv_by_date: std::collections::HashMap<String, Vec<f64>> =
-        std::collections::HashMap::new();
+      println!("DEBUG: Received {} sleep period records from Oura API", response.data.len());
+
+      // Group periods by date for aggregation
+      let mut sleep_by_date: std::collections::HashMap<String, Vec<i64>> = std::collections::HashMap::new();
+      let mut hrv_by_date: std::collections::HashMap<String, Vec<f64>> = std::collections::HashMap::new();
+      let mut deep_by_date: std::collections::HashMap<String, Vec<i64>> = std::collections::HashMap::new();
+      let mut rem_by_date: std::collections::HashMap<String, Vec<i64>> = std::collections::HashMap::new();
+      let mut light_by_date: std::collections::HashMap<String, Vec<i64>> = std::collections::HashMap::new();
 
       for period in response.data {
-        if let Some(hrv) = period.average_hrv {
-          // Extract date from bedtime_start (ISO timestamp)
-          if let Ok(bedtime) = chrono::DateTime::parse_from_rfc3339(&period.bedtime_start) {
-            let date = bedtime.date_naive().format("%Y-%m-%d").to_string();
+        // Extract date from bedtime_start (ISO timestamp)
+        if let Ok(bedtime) = chrono::DateTime::parse_from_rfc3339(&period.bedtime_start) {
+          let date = bedtime.date_naive().format("%Y-%m-%d").to_string();
+
+          // Aggregate sleep durations
+          if let Some(total) = period.total_sleep_duration {
+            sleep_by_date.entry(date.clone()).or_default().push(total);
+          }
+          if let Some(deep) = period.deep_sleep_duration {
+            deep_by_date.entry(date.clone()).or_default().push(deep);
+          }
+          if let Some(rem) = period.rem_sleep_duration {
+            rem_by_date.entry(date.clone()).or_default().push(rem);
+          }
+          if let Some(light) = period.light_sleep_duration {
+            light_by_date.entry(date.clone()).or_default().push(light);
+          }
+
+          // Aggregate HRV
+          if let Some(hrv) = period.average_hrv {
             hrv_by_date.entry(date).or_default().push(hrv);
           }
         }
       }
+
+      // Save aggregated sleep data for each date (sum durations from multiple periods)
+      for (date, durations) in sleep_by_date {
+        let total_sleep = durations.iter().sum::<i64>();
+        let deep_sleep = deep_by_date.get(&date).map(|v| v.iter().sum()).unwrap_or(0);
+        let rem_sleep = rem_by_date.get(&date).map(|v| v.iter().sum()).unwrap_or(0);
+        let light_sleep = light_by_date.get(&date).map(|v| v.iter().sum()).unwrap_or(0);
+
+        println!("DEBUG: Sleep for {}: total={}s ({}h), deep={}s, rem={}s, light={}s",
+          date, total_sleep, total_sleep as f64 / 3600.0, deep_sleep, rem_sleep, light_sleep);
+
+        // Create a DailySleepData-like structure for saving
+        // We'll just directly insert into DB instead of using save_sleep_data
+        sqlx::query(
+          r#"
+          INSERT INTO oura_sleep (
+            date, total_sleep_seconds, deep_sleep_seconds,
+            rem_sleep_seconds, light_sleep_seconds
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5)
+          ON CONFLICT(date) DO UPDATE SET
+            total_sleep_seconds = excluded.total_sleep_seconds,
+            deep_sleep_seconds = excluded.deep_sleep_seconds,
+            rem_sleep_seconds = excluded.rem_sleep_seconds,
+            light_sleep_seconds = excluded.light_sleep_seconds
+          "#,
+        )
+        .bind(&date)
+        .bind(total_sleep)
+        .bind(deep_sleep)
+        .bind(rem_sleep)
+        .bind(light_sleep)
+        .execute(&state.db)
+        .await
+        .map_err(|e| format!("Failed to save sleep data: {}", e))?;
+
+        sleep_count += 1;
+      }
+      println!("Saved {} sleep records", sleep_count);
 
       // Save average HRV for each date
       for (date, hrv_values) in hrv_by_date {
@@ -337,7 +376,7 @@ pub async fn oura_sync_data(
       println!("Saved {} HRV records", hrv_count);
     }
     Err(e) => {
-      eprintln!("Failed to fetch HRV data: {}", e);
+      eprintln!("Failed to fetch sleep periods: {}", e);
     }
   }
 
