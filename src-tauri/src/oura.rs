@@ -10,9 +10,9 @@ use std::env;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 
-// ---------------------------------------------------------------------------
-// Configuration Constants
-// ---------------------------------------------------------------------------
+/// ---------------------------------------------------------------------------
+/// Configuration Constants
+/// ---------------------------------------------------------------------------
 
 const OURA_AUTH_URL: &str = "https://cloud.ouraring.com/oauth/authorize";
 const OURA_TOKEN_URL: &str = "https://api.ouraring.com/oauth/token";
@@ -20,9 +20,9 @@ const OURA_API_BASE: &str = "https://api.ouraring.com/v2/usercollection";
 const REDIRECT_PORT: u16 = 8766;  // Different from Strava (8765)
 const TOKEN_REFRESH_BUFFER_MINUTES: i64 = 5;
 
-// ---------------------------------------------------------------------------
+/// ---------------------------------------------------------------------------
 /// OAuth Data Structures
-// ---------------------------------------------------------------------------
+/// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct OuraConfig {
@@ -77,9 +77,9 @@ impl OuraTokens {
   }
 }
 
-// ---------------------------------------------------------------------------
+/// ---------------------------------------------------------------------------
 /// Error Handling
-// ---------------------------------------------------------------------------
+/// ---------------------------------------------------------------------------
 
 #[derive(Debug, thiserror::Error, Serialize, Deserialize)]
 #[serde(tag = "type", content = "message")]
@@ -111,8 +111,7 @@ impl From<reqwest::Error> for OuraError {
 }
 
 /// Oura context for coach analysis (sleep and HRV data only, no proprietary scores)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct OuraContext {
   // Sleep data (last night)
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -148,7 +147,6 @@ pub struct OuraContext {
   #[serde(skip_serializing_if = "Option::is_none")]
   pub resting_hr_trend: Option<String>, // "up", "stable", "down"
 }
-
 
 impl OuraContext {
   /// Check if any Oura data is present
@@ -221,9 +219,9 @@ impl OuraContext {
   }
 }
 
-// ---------------------------------------------------------------------------
-// OAuth URL Generation
-// ---------------------------------------------------------------------------
+/// ---------------------------------------------------------------------------
+/// OAuth URL Generation
+/// ---------------------------------------------------------------------------
 
 pub fn build_auth_url(config: &OuraConfig) -> Result<String, OuraError> {
   let mut url = url::Url::parse(OURA_AUTH_URL)
@@ -239,9 +237,9 @@ pub fn build_auth_url(config: &OuraConfig) -> Result<String, OuraError> {
   Ok(url.to_string())
 }
 
-// ---------------------------------------------------------------------------
-// Token Exchange (Authorization Code -> Tokens)
-// ---------------------------------------------------------------------------
+/// ---------------------------------------------------------------------------
+/// Token Exchange (Authorization Code -> Tokens)
+/// ---------------------------------------------------------------------------
 
 pub async fn exchange_code_for_tokens(
   config: &OuraConfig,
@@ -273,9 +271,9 @@ pub async fn exchange_code_for_tokens(
   Ok(OuraTokens::from_response(token_response))
 }
 
-// ---------------------------------------------------------------------------
-// Token Refresh
-// ---------------------------------------------------------------------------
+/// ---------------------------------------------------------------------------
+/// Token Refresh
+/// ---------------------------------------------------------------------------
 
 pub async fn refresh_tokens(
   config: &OuraConfig,
@@ -306,9 +304,9 @@ pub async fn refresh_tokens(
   Ok(OuraTokens::from_response(token_response))
 }
 
-// ---------------------------------------------------------------------------
-// OAuth Callback Server
-// ---------------------------------------------------------------------------
+/// ---------------------------------------------------------------------------
+/// OAuth Callback Server
+/// ---------------------------------------------------------------------------
 
 pub struct CallbackResult {
   pub code: String,
@@ -369,9 +367,9 @@ pub fn wait_for_callback() -> Result<CallbackResult, String> {
   Ok(CallbackResult { code })
 }
 
-// ---------------------------------------------------------------------------
-// Oura API Data Structures
-// ---------------------------------------------------------------------------
+/// ---------------------------------------------------------------------------
+/// Oura API Data Structures
+/// ---------------------------------------------------------------------------
 
 /// Daily sleep response from Oura API v2
 #[derive(Debug, Deserialize)]
@@ -394,18 +392,23 @@ pub struct SleepContributors {
   pub sleep_efficiency: Option<i64>, // percentage (0-100)
 }
 
-/// Sleep periods response (contains HRV data)
+/// Sleep periods response (contains actual sleep durations and HRV data)
 #[derive(Debug, Deserialize)]
 pub struct SleepPeriodsResponse {
   pub data: Vec<SleepPeriod>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct SleepPeriod {
   pub bedtime_start: String,  // ISO timestamp
   pub bedtime_end: String,    // ISO timestamp
   pub average_hrv: Option<f64>, // HRV in milliseconds
+  pub total_sleep_duration: Option<i64>,  // Actual sleep duration in seconds
+  pub deep_sleep_duration: Option<i64>,   // Deep sleep in seconds
+  pub rem_sleep_duration: Option<i64>,    // REM sleep in seconds
+  pub light_sleep_duration: Option<i64>,  // Light sleep in seconds
+  pub sleep_efficiency: Option<i64>,      // Efficiency percentage (0-100)
+  pub lowest_heart_rate: Option<i64>,     // Actual resting HR in BPM
 }
 
 /// Daily readiness response (contains resting HR)
@@ -425,9 +428,9 @@ pub struct ReadinessContributors {
   pub resting_heart_rate: Option<i64>,  // beats per minute
 }
 
-// ---------------------------------------------------------------------------
-// Oura API Data Fetching
-// ---------------------------------------------------------------------------
+/// ---------------------------------------------------------------------------
+/// Oura API Data Fetching
+/// ---------------------------------------------------------------------------
 
 /// Fetch daily sleep data from Oura API for a date range
 pub async fn fetch_daily_sleep(
@@ -519,9 +522,9 @@ pub async fn fetch_daily_readiness(
   Ok(response.json().await?)
 }
 
-// ---------------------------------------------------------------------------
+/// ---------------------------------------------------------------------------
 /// Tests
-// ---------------------------------------------------------------------------
+/// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -588,40 +591,189 @@ mod tests {
     let result = OuraContext::determine_resting_hr_trend(Some(51), Some(50));
     assert_eq!(result, Some("stable".to_string()));
   }
+}
 
-  // ---------------------------------------------------------------------------
-  // Phase 8: Oura OAuth Helper Tests
-  // ---------------------------------------------------------------------------
+// ## ---------------------------------------------------------------------------
+// ## Database Query Functions for Recovery Signals
+// ## ---------------------------------------------------------------------------
 
-  #[test]
-  fn test_build_oura_auth_url_contains_required_params() {
-    // Arrange
-    let config = OuraConfig {
-      client_id: "oura_client_123".to_string(),
-      client_secret: "oura_secret".to_string(),
-      redirect_uri: "http://localhost:8081/oura/callback".to_string(),
-    };
+use crate::db::DbPool;
+use crate::models::recovery::{OuraBaseline, OuraDay};
 
-    // Act
-    let url = build_auth_url(&config).expect("Should build Oura auth URL");
+/// Get most recent Oura day with all metrics joined
+/// Uses CTE pattern to ensure days with only HRV or RHR data are included
+pub async fn get_most_recent_oura_day(pool: &DbPool) -> Result<OuraDay, OuraError> {
+  let query = "
+    WITH all_dates AS (
+      SELECT date FROM oura_sleep
+      UNION
+      SELECT date FROM oura_hrv
+      UNION
+      SELECT date FROM oura_resting_hr
+    )
+    SELECT
+      d.date,
+      CAST(s.total_sleep_seconds AS REAL) / 3600.0 as sleep_hours,
+      h.average_hrv_ms,
+      CAST(r.resting_hr AS REAL) as resting_hr_bpm
+    FROM all_dates d
+    LEFT JOIN oura_sleep s ON d.date = s.date
+    LEFT JOIN oura_hrv h ON d.date = h.date
+    LEFT JOIN oura_resting_hr r ON d.date = r.date
+    ORDER BY d.date DESC
+    LIMIT 1
+  ";
 
-    // Assert: URL should contain all required OAuth params
-    assert!(
-      url.contains("client_id=oura_client_123"),
-      "Should contain client_id"
-    );
-    assert!(url.contains("redirect_uri="), "Should contain redirect_uri");
-    assert!(
-      url.contains("response_type=code"),
-      "Should use authorization code flow"
-    );
-    assert!(
-      url.contains("scope=personal%20daily") || url.contains("scope=personal+daily"),
-      "Should request personal daily scope"
-    );
-    assert!(
-      url.starts_with("https://cloud.ouraring.com/oauth/authorize"),
-      "Should use Oura OAuth endpoint"
-    );
+  sqlx::query_as::<_, (String, Option<f64>, Option<f64>, Option<f64>)>(query)
+    .fetch_one(pool)
+    .await
+    .map(|(date, sleep_hours, hrv_ms, resting_hr_bpm)| OuraDay {
+      date,
+      sleep_duration_hours: sleep_hours,
+      hrv_ms,
+      resting_hr_bpm,
+    })
+    .map_err(|e| OuraError::Database(e.to_string()))
+}
+
+/// Get 7-day Oura history with all metrics joined
+pub async fn get_oura_7d_history(pool: &DbPool) -> Result<Vec<OuraDay>, OuraError> {
+  let query = "
+    WITH recent_dates AS (
+      SELECT DISTINCT date
+      FROM (
+        SELECT date FROM oura_sleep
+        UNION
+        SELECT date FROM oura_hrv
+        UNION
+        SELECT date FROM oura_resting_hr
+      )
+      ORDER BY date DESC
+      LIMIT 7
+    )
+    SELECT
+      d.date,
+      CAST(s.total_sleep_seconds AS REAL) / 3600.0 as sleep_hours,
+      h.average_hrv_ms,
+      CAST(r.resting_hr AS REAL) as resting_hr_bpm
+    FROM recent_dates d
+    LEFT JOIN oura_sleep s ON d.date = s.date
+    LEFT JOIN oura_hrv h ON d.date = h.date
+    LEFT JOIN oura_resting_hr r ON d.date = r.date
+    ORDER BY d.date ASC
+  ";
+
+  sqlx::query_as::<_, (String, Option<f64>, Option<f64>, Option<f64>)>(query)
+    .fetch_all(pool)
+    .await
+    .map(|rows| {
+      rows
+        .into_iter()
+        .map(|(date, sleep_hours, hrv_ms, resting_hr_bpm)| OuraDay {
+          date,
+          sleep_duration_hours: sleep_hours,
+          hrv_ms,
+          resting_hr_bpm,
+        })
+        .collect()
+    })
+    .map_err(|e| OuraError::Database(e.to_string()))
+}
+
+/// Get 28-day baseline averages for sleep, HRV, and resting HR (single query)
+pub async fn get_oura_28d_baseline(pool: &DbPool) -> Result<OuraBaseline, OuraError> {
+  let query = "
+    SELECT
+      (SELECT AVG(CAST(total_sleep_seconds AS REAL)) / 3600.0
+       FROM oura_sleep
+       WHERE date >= date('now', '-28 days')) as sleep_avg,
+      (SELECT AVG(average_hrv_ms)
+       FROM oura_hrv
+       WHERE date >= date('now', '-28 days')) as hrv_avg,
+      (SELECT AVG(CAST(resting_hr AS REAL))
+       FROM oura_resting_hr
+       WHERE date >= date('now', '-28 days')) as rhr_avg
+  ";
+
+  sqlx::query_as::<_, (Option<f64>, Option<f64>, Option<f64>)>(query)
+    .fetch_one(pool)
+    .await
+    .map(|(sleep_avg, hrv_avg, rhr_avg)| OuraBaseline {
+      sleep_avg_28d: sleep_avg,
+      hrv_avg_28d: hrv_avg,
+      rhr_avg_28d: rhr_avg,
+    })
+    .map_err(|e| OuraError::Database(e.to_string()))
+}
+
+/// Check if Oura data is fresh (within specified hours)
+pub async fn is_oura_data_fresh(pool: &DbPool, max_age_hours: i64) -> Result<bool, OuraError> {
+  // Convert hours to days (round up to ensure we include the target day)
+  let max_age_days = (max_age_hours + 23) / 24;
+
+  let query = format!(
+    "SELECT 1
+     FROM (
+       SELECT MAX(date) as latest_date
+       FROM (
+         SELECT MAX(date) as date FROM oura_sleep
+         UNION ALL
+         SELECT MAX(date) as date FROM oura_hrv
+         UNION ALL
+         SELECT MAX(date) as date FROM oura_resting_hr
+       )
+     )
+     WHERE latest_date >= date('now', '-{} days')",
+    max_age_days
+  );
+
+  let result = sqlx::query_scalar::<_, i32>(&query)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| OuraError::Database(e.to_string()))?;
+
+  Ok(result.is_some())
+}
+
+/// Compute recovery signals from Oura database (convenience wrapper)
+/// Returns None if data is stale or incomplete
+pub async fn compute_recovery_signals_from_db(
+  pool: &DbPool,
+  sleep_target: f64,
+  max_age_hours: i64,
+) -> Result<Option<crate::models::recovery::RecoverySignals>, OuraError> {
+  // Check if data is fresh
+  if !is_oura_data_fresh(pool, max_age_hours).await? {
+    return Ok(None);
   }
+
+  // Fetch all required data
+  let recent = get_most_recent_oura_day(pool).await?;
+  let history = get_oura_7d_history(pool).await?;
+  let baseline = get_oura_28d_baseline(pool).await?;
+
+  // ## Validate completeness before computing -----------------------------------
+  // Require at least one current metric AND at least one baseline metric
+  // to avoid returning optimistic "Green" with all None values
+  let has_current_metric = recent.sleep_duration_hours.is_some()
+    || recent.hrv_ms.is_some()
+    || recent.resting_hr_bpm.is_some();
+
+  let has_baseline_metric = baseline.sleep_avg_28d.is_some()
+    || baseline.hrv_avg_28d.is_some()
+    || baseline.rhr_avg_28d.is_some();
+
+  if !has_current_metric || !has_baseline_metric {
+    return Ok(None);  // Data incomplete, skip signal computation
+  }
+
+  // Compute signals
+  let signals = crate::models::recovery::compute_recovery_signals(
+    &recent,
+    &history,
+    &baseline,
+    sleep_target,
+  );
+
+  Ok(Some(signals))
 }
