@@ -3,7 +3,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import "./App.css";
 import { CoachCards } from "./components/CoachCards";
+import { TabNav } from "./components/TabNav";
+import { RecoveryTab } from "./components/RecoveryTab";
 import type { WorkoutAnalysisV4 } from "./types/analysis";
+import type { RecoverySignals, OuraDay, OuraHistoryPoint } from "./types/recovery";
 
 interface StravaAuthStatus {
   is_authenticated: boolean;
@@ -111,6 +114,7 @@ interface AnalysisResult {
 }
 
 function App() {
+  const [activeTab, setActiveTab] = useState("Dashboard");
   const [stravaStatus, setStravaStatus] = useState<StravaAuthStatus | null>(null);
   const [ouraStatus, setOuraStatus] = useState<OuraAuthStatus | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -129,6 +133,11 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
 
+  // Oura Recovery data state
+  const [recoverySignals, setRecoverySignals] = useState<RecoverySignals | null>(null);
+  const [ouraHistory, setOuraHistory] = useState<OuraHistoryPoint[]>([]);
+  const [isLoadingOura, setIsLoadingOura] = useState(false);
+
   // Form state for settings
   const [maxHrInput, setMaxHrInput] = useState("");
   const [lthrInput, setLthrInput] = useState("");
@@ -141,6 +150,13 @@ function App() {
     loadTrainingContext();
     loadLatestAnalysis();
   }, []);
+
+  // Load Oura data when authenticated
+  useEffect(() => {
+    if (ouraStatus?.is_authenticated) {
+      loadOuraData();
+    }
+  }, [ouraStatus?.is_authenticated]);
 
   async function checkStravaStatus() {
     try {
@@ -189,6 +205,34 @@ function App() {
       setLatestAnalysis(null);
     } catch (e) {
       console.error("Failed to load latest analysis:", e);
+    }
+  }
+
+  async function loadOuraData() {
+    setIsLoadingOura(true);
+    try {
+      // Fetch computed recovery signals from backend
+      const signals = await invoke<RecoverySignals | null>("get_recovery_signals");
+      setRecoverySignals(signals);
+
+      // Fetch 7-day history for charts from backend
+      const ouraHistory = await invoke<OuraDay[]>("get_oura_history");
+
+      // Convert OuraDay to OuraHistoryPoint format for charts
+      const historyPoints: OuraHistoryPoint[] = ouraHistory.map(day => ({
+        date: day.date,
+        sleep_hours: day.sleep_duration_hours,
+        hrv: day.hrv_ms,
+        resting_hr: day.resting_hr_bpm
+      }));
+
+      setOuraHistory(historyPoints);
+    } catch (e) {
+      console.error("Failed to load Oura data:", e);
+      setRecoverySignals(null);
+      setOuraHistory([]);
+    } finally {
+      setIsLoadingOura(false);
     }
   }
 
@@ -367,6 +411,13 @@ function App() {
     <main className="container">
       <h1>Trainer Log</h1>
       <p className="subtitle">Ambient training coach</p>
+
+      {/* Tab Navigation */}
+      <TabNav activeTab={activeTab} onTabChange={setActiveTab} />
+
+      {/* Dashboard Tab */}
+      {activeTab === "Dashboard" && (
+        <div className="dashboard-content">
 
       {/* Settings Card */}
       <div className="card">
@@ -620,6 +671,27 @@ function App() {
                 )}
               </div>
             ))}
+          </div>
+        </div>
+      )}
+        </div>
+      )}
+
+      {/* Recovery Tab */}
+      {activeTab === "Recovery" && (
+        <RecoveryTab
+          recoverySignals={recoverySignals}
+          ouraHistory={ouraHistory}
+          isLoading={isLoadingOura}
+        />
+      )}
+
+      {/* Training Tab */}
+      {activeTab === "Training" && (
+        <div className="training-content">
+          <div className="card">
+            <h2>Training Progression</h2>
+            <p className="info">Training progression features coming soon...</p>
           </div>
         </div>
       )}

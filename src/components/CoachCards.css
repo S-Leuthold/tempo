@@ -169,6 +169,53 @@
   color: rgba(255, 255, 255, 0.8);
 }
 
+/* Recovery Row */
+.recovery-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.recovery-emoji {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.recovery-row.recovery-green {
+  color: #4ade80;
+}
+.recovery-row.recovery-yellow {
+  color: #fbbf24;
+}
+.recovery-row.recovery-orange {
+  color: #fb923c;
+}
+.recovery-row.recovery-red {
+  color: #ef4444;
+}
+
+/* Recovery Note */
+.recovery-note-inline {
+  margin: 8px 0;
+  padding: 10px;
+  background: rgba(251, 191, 36, 0.1);
+  border-left: 3px solid #fbbf24;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.recovery-note-inline strong {
+  color: #fbbf24;
+  font-weight: 600;
+  display: block;
+  margin-bottom: 4px;
+}
+
 .flags-section {
   margin: 8px 0;
 }

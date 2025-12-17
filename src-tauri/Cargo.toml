@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Ambient training coach - automated workout analysis and feedback"
 authors = ["Sam Leuthold"]
 edition = "2021"
+default-run = "trainer-log"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -12,7 +13,16 @@ edition = "2021"
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "trainer_log_lib"
+path = "src/lib.rs"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "trainer-log"
+path = "src/main.rs"
+
+[[bin]]
+name = "test_recovery"
+path = "src/bin/test_recovery.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

@@ -61,6 +61,24 @@ export function CoachCards({ analysis }: CoachCardsProps) {
             </span>
           </div>
           <p className="tsb-assessment">{analysis.training_status.tsb_assessment}</p>
+
+          {/* Recovery Band (if present) */}
+          {analysis.training_status.recovery_band && (
+            <div className={`recovery-row recovery-${analysis.training_status.recovery_band.toLowerCase()}`}>
+              <span className="recovery-emoji">{getRecoveryEmoji(analysis.training_status.recovery_band)}</span>
+              <span>
+                Recovery: {analysis.training_status.recovery_band}
+              </span>
+            </div>
+          )}
+
+          {/* Recovery Note (if present) */}
+          {analysis.training_status.recovery_note && (
+            <div className="recovery-note-inline">
+              <strong>Recovery Context:</strong> {analysis.training_status.recovery_note}
+            </div>
+          )}
+
           {analysis.training_status.top_flags.length > 0 && (
             <div className="flags-section">
               {analysis.training_status.top_flags.map((flag, i) => (
@@ -166,4 +184,14 @@ function getTsbEmoji(tsb: number): string {
   if (tsb > -10) return "🟡";
   if (tsb > -20) return "🟠";
   return "🔴";
+}
+
+function getRecoveryEmoji(band: string): string {
+  const emojiMap: Record<string, string> = {
+    Green: "🟢",
+    Yellow: "🟡",
+    Orange: "🟠",
+    Red: "🔴"
+  };
+  return emojiMap[band] || "⚪";
 }

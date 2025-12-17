@@ -530,7 +530,7 @@ impl TrainingFlags {
 
     let has_long_run = days_21.iter().any(|w| {
       w.activity_type.to_lowercase() == "run"
-        && w.duration_seconds.map_or(false, |d| d >= long_run_threshold_secs)
+        && w.duration_seconds.is_some_and(|d| d >= long_run_threshold_secs)
     });
     if !has_long_run && days_21.iter().any(|w| w.activity_type.to_lowercase() == "run") {
       flags.long_run_gap = true;
@@ -547,7 +547,7 @@ impl TrainingFlags {
 
     let has_long_ride = days_21.iter().any(|w| {
       w.activity_type.to_lowercase() == "ride"
-        && w.duration_seconds.map_or(false, |d| d >= long_ride_threshold_secs)
+        && w.duration_seconds.is_some_and(|d| d >= long_ride_threshold_secs)
     });
     if !has_long_ride && days_21.iter().any(|w| w.activity_type.to_lowercase() == "ride") {
       flags.long_ride_gap = true;
@@ -686,6 +686,10 @@ pub struct ContextPackage {
   #[serde(skip_serializing_if = "Option::is_none")]
   pub oura: Option<crate::oura::OuraContext>,
 
+  /// Recovery signals (deterministic capacity modulators from Oura data)
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub recovery_signals: Option<crate::models::recovery::RecoverySignals>,
+
   /// Progression summary (computed by Rust, explains engine decisions to LLM)
   #[serde(skip_serializing_if = "Option::is_none")]
   pub progression_summary: Option<ProgressionSummary>,
@@ -693,6 +697,7 @@ pub struct ContextPackage {
 
 /// Workout structure metadata (for structured workouts like TrainerRoad)
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct WorkoutStructure {
   pub is_structured: bool,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -701,15 +706,6 @@ pub struct WorkoutStructure {
   pub prescribed_target_watts: Option<f64>,
 }
 
-impl Default for WorkoutStructure {
-  fn default() -> Self {
-    Self {
-      is_structured: false,
-      block_type: None,
-      prescribed_target_watts: None,
-    }
-  }
-}
 
 /// Workout-specific context for the LLM
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -855,7 +851,7 @@ impl FatigueContext {
       .iter()
       .filter(|w| {
         let days_ago = (now - w.started_at).num_days();
-        days_ago >= 7 && days_ago < 14
+        (7..14).contains(&days_ago)
       })
       .collect();
 
@@ -1056,6 +1052,7 @@ impl ContextPackage {
       user,
       thresholds: SignificanceThresholds::default(),
       oura: None,  // TODO: Fetch from database when Oura is connected
+      recovery_signals: None,  // Set via with_recovery_signals() builder
       progression_summary: None,
     }
   }
@@ -1065,7 +1062,7 @@ impl ContextPackage {
     use chrono::{Datelike, Duration, Weekday};
 
     let today = workout_date.weekday();
-    let tomorrow = (workout_date.clone() + Duration::days(1)).weekday();
+    let tomorrow = (*workout_date + Duration::days(1)).weekday();
 
     let day_name = |w: Weekday| -> String {
       match w {
@@ -1103,6 +1100,12 @@ impl ContextPackage {
   /// Add progression summary (from Rust progression engine)
   pub fn with_progression_summary(mut self, summary: ProgressionSummary) -> Self {
     self.progression_summary = Some(summary);
+    self
+  }
+
+  /// Add recovery signals (from Oura data)
+  pub fn with_recovery_signals(mut self, signals: crate::models::recovery::RecoverySignals) -> Self {
+    self.recovery_signals = Some(signals);
     self
   }
 

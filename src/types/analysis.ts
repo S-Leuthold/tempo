@@ -29,6 +29,8 @@ export interface TrainingStatusCard {
   tsb_value: number;
   tsb_band: string;
   tsb_assessment: string;
+  recovery_band?: 'Green' | 'Yellow' | 'Orange' | 'Red';
+  recovery_note?: string;
   top_flags: string[];
   adherence_note: string;
   progression_state: string;

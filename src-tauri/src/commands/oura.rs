@@ -35,7 +35,7 @@ pub async fn oura_complete_auth(state: State<'_, Arc<AppState>>) -> Result<(), S
     .map_err(|e| e.to_string())?;
 
   // Wait for callback (blocking - runs in Tauri's async runtime)
-  let callback = tokio::task::spawn_blocking(|| wait_for_callback())
+  let callback = tokio::task::spawn_blocking(wait_for_callback)
     .await
     .map_err(|e| e.to_string())?
     .map_err(|e| e.to_string())?;
@@ -129,7 +129,7 @@ async fn save_tokens(db: &crate::db::DbPool, tokens: &OuraTokens) -> Result<(), 
   )
   .bind(&tokens.access_token)
   .bind(&tokens.refresh_token)
-  .bind(&tokens.expires_at)
+  .bind(tokens.expires_at)
   .execute(db)
   .await
   .map_err(|e| e.to_string())?;
@@ -162,41 +162,6 @@ pub async fn oura_refresh_auth(state: State<'_, Arc<AppState>>) -> Result<(), St
 /// ---------------------------------------------------------------------------
 /// Database Helpers for Oura Data
 /// ---------------------------------------------------------------------------
-
-async fn save_sleep_data(
-  db: &crate::db::DbPool,
-  date: &str,
-  sleep_data: &crate::oura::DailySleepData,
-) -> Result<(), String> {
-  let contributors = &sleep_data.contributors;
-
-  sqlx::query(
-    r#"
-    INSERT INTO oura_sleep (
-      date, total_sleep_seconds, deep_sleep_seconds,
-      rem_sleep_seconds, light_sleep_seconds, efficiency_pct
-    )
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-    ON CONFLICT(date) DO UPDATE SET
-      total_sleep_seconds = excluded.total_sleep_seconds,
-      deep_sleep_seconds = excluded.deep_sleep_seconds,
-      rem_sleep_seconds = excluded.rem_sleep_seconds,
-      light_sleep_seconds = excluded.light_sleep_seconds,
-      efficiency_pct = excluded.efficiency_pct
-    "#,
-  )
-  .bind(date)
-  .bind(contributors.total_sleep)
-  .bind(contributors.deep_sleep)
-  .bind(contributors.rem_sleep)
-  .bind(contributors.light_sleep)
-  .bind(contributors.sleep_efficiency)
-  .execute(db)
-  .await
-  .map_err(|e| format!("Failed to save sleep data: {}", e))?;
-
-  Ok(())
-}
 
 async fn save_hrv_data(
   db: &crate::db::DbPool,
@@ -257,7 +222,7 @@ pub struct OuraSyncResult {
 pub async fn oura_sync_data(
   state: State<'_, Arc<AppState>>,
 ) -> Result<OuraSyncResult, String> {
-  use crate::oura::{fetch_daily_readiness, fetch_daily_sleep, fetch_sleep_periods, OuraConfig};
+  use crate::oura::{fetch_sleep_periods, OuraConfig};
   use chrono::Local;
 
   let config = OuraConfig::from_env().map_err(|e| e.to_string())?;
@@ -287,36 +252,89 @@ pub async fn oura_sync_data(
   let mut hrv_count = 0;
   let mut resting_hr_count = 0;
 
-  // Fetch daily sleep data
-  match fetch_daily_sleep(&tokens.access_token, &start_str, &end_str).await {
-    Ok(response) => {
-      for sleep_data in response.data {
-        save_sleep_data(&state.db, &sleep_data.day, &sleep_data).await?;
-        sleep_count += 1;
-      }
-      println!("Saved {} sleep records", sleep_count);
-    }
-    Err(e) => {
-      eprintln!("Failed to fetch sleep data: {}", e);
-    }
-  }
-
-  // Fetch sleep periods for HRV data
+  // Fetch sleep periods (contains BOTH actual sleep duration AND HRV)
+  // Note: daily_sleep endpoint has "contributors" which are scores (0-100), NOT durations
   match fetch_sleep_periods(&tokens.access_token, &start_str, &end_str).await {
     Ok(response) => {
-      // Group periods by date and average HRV for each day
-      let mut hrv_by_date: std::collections::HashMap<String, Vec<f64>> =
-        std::collections::HashMap::new();
+      println!("DEBUG: Received {} sleep period records from Oura API", response.data.len());
+
+      // Group periods by date for aggregation
+      let mut sleep_by_date: std::collections::HashMap<String, Vec<i64>> = std::collections::HashMap::new();
+      let mut hrv_by_date: std::collections::HashMap<String, Vec<f64>> = std::collections::HashMap::new();
+      let mut rhr_by_date: std::collections::HashMap<String, Vec<i64>> = std::collections::HashMap::new();
+      let mut deep_by_date: std::collections::HashMap<String, Vec<i64>> = std::collections::HashMap::new();
+      let mut rem_by_date: std::collections::HashMap<String, Vec<i64>> = std::collections::HashMap::new();
+      let mut light_by_date: std::collections::HashMap<String, Vec<i64>> = std::collections::HashMap::new();
 
       for period in response.data {
-        if let Some(hrv) = period.average_hrv {
-          // Extract date from bedtime_start (ISO timestamp)
-          if let Ok(bedtime) = chrono::DateTime::parse_from_rfc3339(&period.bedtime_start) {
-            let date = bedtime.date_naive().format("%Y-%m-%d").to_string();
-            hrv_by_date.entry(date).or_insert_with(Vec::new).push(hrv);
+        // Extract date from bedtime_start (ISO timestamp)
+        if let Ok(bedtime) = chrono::DateTime::parse_from_rfc3339(&period.bedtime_start) {
+          let date = bedtime.date_naive().format("%Y-%m-%d").to_string();
+
+          // Aggregate sleep durations
+          if let Some(total) = period.total_sleep_duration {
+            sleep_by_date.entry(date.clone()).or_default().push(total);
+          }
+          if let Some(deep) = period.deep_sleep_duration {
+            deep_by_date.entry(date.clone()).or_default().push(deep);
+          }
+          if let Some(rem) = period.rem_sleep_duration {
+            rem_by_date.entry(date.clone()).or_default().push(rem);
+          }
+          if let Some(light) = period.light_sleep_duration {
+            light_by_date.entry(date.clone()).or_default().push(light);
+          }
+
+          // Aggregate HRV
+          if let Some(hrv) = period.average_hrv {
+            hrv_by_date.entry(date.clone()).or_default().push(hrv);
+          }
+
+          // Aggregate resting HR (lowest_heart_rate = actual BPM)
+          if let Some(rhr) = period.lowest_heart_rate {
+            rhr_by_date.entry(date).or_default().push(rhr);
           }
         }
       }
+
+      // Save aggregated sleep data for each date (sum durations from multiple periods)
+      for (date, durations) in sleep_by_date {
+        let total_sleep = durations.iter().sum::<i64>();
+        let deep_sleep = deep_by_date.get(&date).map(|v| v.iter().sum()).unwrap_or(0);
+        let rem_sleep = rem_by_date.get(&date).map(|v| v.iter().sum()).unwrap_or(0);
+        let light_sleep = light_by_date.get(&date).map(|v| v.iter().sum()).unwrap_or(0);
+
+        println!("DEBUG: Sleep for {}: total={}s ({}h), deep={}s, rem={}s, light={}s",
+          date, total_sleep, total_sleep as f64 / 3600.0, deep_sleep, rem_sleep, light_sleep);
+
+        // Create a DailySleepData-like structure for saving
+        // We'll just directly insert into DB instead of using save_sleep_data
+        sqlx::query(
+          r#"
+          INSERT INTO oura_sleep (
+            date, total_sleep_seconds, deep_sleep_seconds,
+            rem_sleep_seconds, light_sleep_seconds
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5)
+          ON CONFLICT(date) DO UPDATE SET
+            total_sleep_seconds = excluded.total_sleep_seconds,
+            deep_sleep_seconds = excluded.deep_sleep_seconds,
+            rem_sleep_seconds = excluded.rem_sleep_seconds,
+            light_sleep_seconds = excluded.light_sleep_seconds
+          "#,
+        )
+        .bind(&date)
+        .bind(total_sleep)
+        .bind(deep_sleep)
+        .bind(rem_sleep)
+        .bind(light_sleep)
+        .execute(&state.db)
+        .await
+        .map_err(|e| format!("Failed to save sleep data: {}", e))?;
+
+        sleep_count += 1;
+      }
+      println!("Saved {} sleep records", sleep_count);
 
       // Save average HRV for each date
       for (date, hrv_values) in hrv_by_date {
@@ -327,25 +345,22 @@ pub async fn oura_sync_data(
         }
       }
       println!("Saved {} HRV records", hrv_count);
-    }
-    Err(e) => {
-      eprintln!("Failed to fetch HRV data: {}", e);
-    }
-  }
 
-  // Fetch daily readiness for resting HR
-  match fetch_daily_readiness(&tokens.access_token, &start_str, &end_str).await {
-    Ok(response) => {
-      for readiness_data in response.data {
-        if let Some(resting_hr) = readiness_data.contributors.resting_heart_rate {
-          save_resting_hr_data(&state.db, &readiness_data.day, resting_hr).await?;
+      // Save minimum resting HR for each date (lowest from all sleep periods)
+      for (date, rhr_values) in rhr_by_date {
+        if !rhr_values.is_empty() {
+          // Use minimum (lowest) HR as the resting HR for the day
+          let resting_hr = *rhr_values.iter().min().unwrap();
+          println!("DEBUG: Resting HR for {}: {}bpm (lowest from {} periods)",
+            date, resting_hr, rhr_values.len());
+          save_resting_hr_data(&state.db, &date, resting_hr).await?;
           resting_hr_count += 1;
         }
       }
-      println!("Saved {} resting HR records", resting_hr_count);
+      println!("Saved {} resting HR records from sleep periods", resting_hr_count);
     }
     Err(e) => {
-      eprintln!("Failed to fetch resting HR data: {}", e);
+      eprintln!("Failed to fetch sleep periods: {}", e);
     }
   }
 
@@ -354,4 +369,36 @@ pub async fn oura_sync_data(
     hrv_records: hrv_count,
     resting_hr_records: resting_hr_count,
   })
+}
+
+/// ---------------------------------------------------------------------------
+/// Get Recovery Signals
+/// ---------------------------------------------------------------------------
+
+/// Fetch computed recovery signals from Oura data
+/// Returns None if data is stale (>36 hours old) or insufficient
+#[tauri::command]
+pub async fn get_recovery_signals(
+  state: State<'_, Arc<AppState>>,
+) -> Result<Option<crate::models::recovery::RecoverySignals>, String> {
+  const SLEEP_TARGET_HOURS: f64 = 7.0;
+  const MAX_AGE_HOURS: i64 = 36;
+
+  crate::oura::compute_recovery_signals_from_db(
+    &state.db,
+    SLEEP_TARGET_HOURS,
+    MAX_AGE_HOURS,
+  )
+  .await
+  .map_err(|e| e.to_string())
+}
+
+/// Fetch 7-day Oura history for chart visualization
+#[tauri::command]
+pub async fn get_oura_history(
+  state: State<'_, Arc<AppState>>,
+) -> Result<Vec<crate::models::recovery::OuraDay>, String> {
+  crate::oura::get_oura_7d_history(&state.db)
+    .await
+    .map_err(|e| e.to_string())
 }

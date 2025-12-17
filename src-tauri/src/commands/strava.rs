@@ -10,6 +10,12 @@ use std::sync::Arc;
 use tauri::State;
 
 /// ---------------------------------------------------------------------------
+/// Type Aliases for Database Query Results
+/// ---------------------------------------------------------------------------
+
+type StravaTokenRow = (Option<String>, Option<String>, Option<chrono::DateTime<Utc>>);
+
+/// ---------------------------------------------------------------------------
 /// Start OAuth Flow
 /// ---------------------------------------------------------------------------
 
@@ -149,7 +155,7 @@ async fn save_tokens(db: &crate::db::DbPool, tokens: &StravaTokens) -> Result<()
   )
   .bind(&tokens.access_token)
   .bind(&tokens.refresh_token)
-  .bind(&tokens.expires_at)
+  .bind(tokens.expires_at)
   .execute(db)
   .await
   .map_err(|e| StravaError::Database(e.to_string()))?;
@@ -158,7 +164,7 @@ async fn save_tokens(db: &crate::db::DbPool, tokens: &StravaTokens) -> Result<()
 }
 
 async fn load_tokens(db: &crate::db::DbPool) -> Result<Option<StravaTokens>, StravaError> {
-  let row: Option<(Option<String>, Option<String>, Option<chrono::DateTime<Utc>>)> = sqlx::query_as(
+  let row: Option<StravaTokenRow> = sqlx::query_as(
     "SELECT access_token, refresh_token, token_expires_at
              FROM sync_state WHERE source = 'strava'",
   )
@@ -272,7 +278,7 @@ async fn save_activity(
   )
   .bind(activity.id.to_string())
   .bind(&activity.activity_type)
-  .bind(&activity.start_date)
+  .bind(activity.start_date)
   .bind(activity.moving_time)
   .bind(activity.distance)
   .bind(activity.total_elevation_gain)

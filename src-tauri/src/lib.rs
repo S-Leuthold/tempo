@@ -1,11 +1,15 @@
+#![allow(clippy::empty_line_after_doc_comments)]
+#![allow(clippy::empty_line_after_outer_attr)]
+#![allow(clippy::too_many_arguments)]
+
 mod analysis;
 mod db;
 mod llm;
-mod models;
+pub mod models;
 mod commands;
 mod progression;
 mod strava;
-mod oura;
+pub mod oura;
 
 use db::AppState;
 use std::sync::Arc;
@@ -52,6 +56,8 @@ pub fn run() {
       commands::oura::oura_refresh_auth,
       commands::oura::oura_disconnect,
       commands::oura::oura_sync_data,
+      commands::oura::get_recovery_signals,
+      commands::oura::get_oura_history,
       commands::analysis::get_user_settings,
       commands::analysis::update_user_settings,
       commands::analysis::compute_workout_metrics,
