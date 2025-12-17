@@ -163,41 +163,6 @@ pub async fn oura_refresh_auth(state: State<'_, Arc<AppState>>) -> Result<(), St
 /// Database Helpers for Oura Data
 /// ---------------------------------------------------------------------------
 
-async fn save_sleep_data(
-  db: &crate::db::DbPool,
-  date: &str,
-  sleep_data: &crate::oura::DailySleepData,
-) -> Result<(), String> {
-  let contributors = &sleep_data.contributors;
-
-  sqlx::query(
-    r#"
-    INSERT INTO oura_sleep (
-      date, total_sleep_seconds, deep_sleep_seconds,
-      rem_sleep_seconds, light_sleep_seconds, efficiency_pct
-    )
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-    ON CONFLICT(date) DO UPDATE SET
-      total_sleep_seconds = excluded.total_sleep_seconds,
-      deep_sleep_seconds = excluded.deep_sleep_seconds,
-      rem_sleep_seconds = excluded.rem_sleep_seconds,
-      light_sleep_seconds = excluded.light_sleep_seconds,
-      efficiency_pct = excluded.efficiency_pct
-    "#,
-  )
-  .bind(date)
-  .bind(contributors.total_sleep)
-  .bind(contributors.deep_sleep)
-  .bind(contributors.rem_sleep)
-  .bind(contributors.light_sleep)
-  .bind(contributors.sleep_efficiency)
-  .execute(db)
-  .await
-  .map_err(|e| format!("Failed to save sleep data: {}", e))?;
-
-  Ok(())
-}
-
 async fn save_hrv_data(
   db: &crate::db::DbPool,
   date: &str,
@@ -257,7 +222,7 @@ pub struct OuraSyncResult {
 pub async fn oura_sync_data(
   state: State<'_, Arc<AppState>>,
 ) -> Result<OuraSyncResult, String> {
-  use crate::oura::{fetch_daily_readiness, fetch_daily_sleep, fetch_sleep_periods, OuraConfig};
+  use crate::oura::{fetch_sleep_periods, OuraConfig};
   use chrono::Local;
 
   let config = OuraConfig::from_env().map_err(|e| e.to_string())?;
