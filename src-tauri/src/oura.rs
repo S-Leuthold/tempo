@@ -408,6 +408,7 @@ pub struct SleepPeriod {
   pub rem_sleep_duration: Option<i64>,    // REM sleep in seconds
   pub light_sleep_duration: Option<i64>,  // Light sleep in seconds
   pub sleep_efficiency: Option<i64>,      // Efficiency percentage (0-100)
+  pub lowest_heart_rate: Option<i64>,     // Actual resting HR in BPM
 }
 
 /// Daily readiness response (contains resting HR)

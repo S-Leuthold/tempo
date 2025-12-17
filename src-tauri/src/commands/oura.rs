@@ -296,6 +296,7 @@ pub async fn oura_sync_data(
       // Group periods by date for aggregation
       let mut sleep_by_date: std::collections::HashMap<String, Vec<i64>> = std::collections::HashMap::new();
       let mut hrv_by_date: std::collections::HashMap<String, Vec<f64>> = std::collections::HashMap::new();
+      let mut rhr_by_date: std::collections::HashMap<String, Vec<i64>> = std::collections::HashMap::new();
       let mut deep_by_date: std::collections::HashMap<String, Vec<i64>> = std::collections::HashMap::new();
       let mut rem_by_date: std::collections::HashMap<String, Vec<i64>> = std::collections::HashMap::new();
       let mut light_by_date: std::collections::HashMap<String, Vec<i64>> = std::collections::HashMap::new();
@@ -321,7 +322,12 @@ pub async fn oura_sync_data(
 
           // Aggregate HRV
           if let Some(hrv) = period.average_hrv {
-            hrv_by_date.entry(date).or_default().push(hrv);
+            hrv_by_date.entry(date.clone()).or_default().push(hrv);
+          }
+
+          // Aggregate resting HR (lowest_heart_rate = actual BPM)
+          if let Some(rhr) = period.lowest_heart_rate {
+            rhr_by_date.entry(date).or_default().push(rhr);
           }
         }
       }
@@ -374,25 +380,22 @@ pub async fn oura_sync_data(
         }
       }
       println!("Saved {} HRV records", hrv_count);
-    }
-    Err(e) => {
-      eprintln!("Failed to fetch sleep periods: {}", e);
-    }
-  }
 
-  // Fetch daily readiness for resting HR
-  match fetch_daily_readiness(&tokens.access_token, &start_str, &end_str).await {
-    Ok(response) => {
-      for readiness_data in response.data {
-        if let Some(resting_hr) = readiness_data.contributors.resting_heart_rate {
-          save_resting_hr_data(&state.db, &readiness_data.day, resting_hr).await?;
+      // Save minimum resting HR for each date (lowest from all sleep periods)
+      for (date, rhr_values) in rhr_by_date {
+        if !rhr_values.is_empty() {
+          // Use minimum (lowest) HR as the resting HR for the day
+          let resting_hr = *rhr_values.iter().min().unwrap();
+          println!("DEBUG: Resting HR for {}: {}bpm (lowest from {} periods)",
+            date, resting_hr, rhr_values.len());
+          save_resting_hr_data(&state.db, &date, resting_hr).await?;
           resting_hr_count += 1;
         }
       }
-      println!("Saved {} resting HR records", resting_hr_count);
+      println!("Saved {} resting HR records from sleep periods", resting_hr_count);
     }
     Err(e) => {
-      eprintln!("Failed to fetch resting HR data: {}", e);
+      eprintln!("Failed to fetch sleep periods: {}", e);
     }
   }
 
