@@ -11,6 +11,9 @@ mod progression;
 mod strava;
 pub mod oura;
 
+#[cfg(test)]
+pub mod test_utils;
+
 use db::AppState;
 use std::sync::Arc;
 use tauri::Manager;

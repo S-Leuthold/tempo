@@ -402,3 +402,66 @@ pub async fn get_oura_history(
     .await
     .map_err(|e| e.to_string())
 }
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::test_utils::*;
+  use serial_test::serial;
+  use tauri::Manager;
+
+  #[tokio::test]
+  #[serial]
+  async fn test_oura_get_auth_status() {
+    let pool = setup_test_db().await;
+    let state = Arc::new(AppState { db: pool.clone() });
+    let app = tauri::test::mock_app();
+    app.manage(state);
+
+    let result = oura_get_auth_status(app.state()).await;
+    assert!(result.is_ok());
+
+    let status = result.unwrap();
+    assert_eq!(status.is_authenticated, false, "Should not be authenticated with no tokens");
+    assert_eq!(status.expires_at, None, "expires_at should be None when not authenticated");
+    assert_eq!(status.needs_refresh, false, "needs_refresh should be false when not authenticated");
+
+    teardown_test_db(pool).await;
+  }
+
+  #[tokio::test]
+  #[serial]
+  async fn test_oura_disconnect() {
+    let pool = setup_test_db().await;
+    let state = Arc::new(AppState { db: pool.clone() });
+    let app = tauri::test::mock_app();
+    app.manage(state);
+
+    let result = oura_disconnect(app.state()).await;
+    assert!(result.is_ok());
+
+    // Verify tokens were removed from DB
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM oura_auth")
+      .fetch_one(&pool)
+      .await
+      .expect("Failed to query oura_auth");
+
+    assert_eq!(count, 0, "oura_auth table should be empty after disconnect");
+
+    teardown_test_db(pool).await;
+  }
+
+  #[tokio::test]
+  #[serial]
+  async fn test_oura_sync_no_auth() {
+    let pool = setup_test_db().await;
+    let state = Arc::new(AppState { db: pool.clone() });
+    let app = tauri::test::mock_app();
+    app.manage(state);
+
+    let result = oura_sync_data(app.state()).await;
+    // Should fail due to no auth
+    assert!(result.is_err());
+
+    teardown_test_db(pool).await;
+  }
+}
