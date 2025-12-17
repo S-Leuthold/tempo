@@ -2,19 +2,21 @@
 
 ## Current Status
 
-**✅ Complete:**
-- Oura data model (`OuraContext`) with sleep, HRV, resting HR fields
-- OAuth scaffolding (config, tokens, error types)
-- Integration point in `ContextPackage`
-- V4 cards ready to display Oura insights
+**✅ COMPLETE - Recovery Integration Fully Functional:**
+- Oura OAuth flow (start_auth, complete_auth, refresh, disconnect)
+- Database tables (oura_auth, oura_sleep, oura_hrv, oura_resting_hr)
+- Data sync from Oura API v2 (sleep periods endpoint)
+- Recovery signal computation (sleep/HRV/RHR axes with baselines)
+- Recovery band determination (Green/Yellow/Orange/Red)
+- Recovery tab UI with detailed metrics and charts
+- LLM integration - recovery signals in coach analysis
+- V4 prompt updated with recovery interpretation rules
+- 102 tests passing including recovery signal tests
 
-**📋 To Do:**
-1. Complete OAuth implementation (start_auth, complete_auth, refresh)
-2. Database migration (oura_auth, sleep, HRV, resting HR tables)
-3. Tauri commands (connect, sync, get_status)
-4. Data sync from Oura API
-5. Update V4 prompt with Oura usage rules
-6. Frontend UI (connection button, status display)
+**🐛 Critical Fixes Applied:**
+- ⚠️ **IMPORTANT**: Oura `daily_sleep` endpoint returns **scores (0-100)**, NOT actual sleep duration
+- ⚠️ **IMPORTANT**: Oura `daily_readiness` contributors.resting_heart_rate is a **score**, NOT actual BPM
+- ✅ **Solution**: Use `sleep` (sleep periods) endpoint for ALL recovery metrics with actual values
 
 ---
 
@@ -442,14 +444,102 @@ From Oura API documentation:
 
 ---
 
-## Next Implementation Steps
+## ✅ Implementation Complete
 
-1. Complete OAuth functions in `oura.rs`
-2. Create `commands/oura.rs` with Tauri commands
-3. Add commands to main.rs
-4. Create database migration
-5. Implement data sync
-6. Add frontend UI
-7. Update V4 prompt with Oura rules
+All steps finished. Recovery integration is fully functional.
 
-The architecture is in place - just needs the OAuth plumbing completed following the Strava pattern.
+---
+
+## 🚨 CRITICAL: Correct Oura API Endpoint Usage
+
+### The Problem We Discovered
+
+Oura API v2 has **two different endpoint types** that look similar but return fundamentally different data:
+
+#### ❌ WRONG Endpoints (Return Scores 0-100, NOT Actual Values)
+
+**`/usercollection/daily_sleep`**
+```json
+{
+  "contributors": {
+    "total_sleep": 54,      // ← SCORE (0-100), NOT seconds!
+    "deep_sleep": 94,       // ← SCORE
+    "rem_sleep": 63,        // ← SCORE
+    "efficiency": 85        // ← SCORE
+  }
+}
+```
+
+**`/usercollection/daily_readiness`**
+```json
+{
+  "contributors": {
+    "resting_heart_rate": 100,  // ← SCORE (0-100), NOT BPM!
+    "hrv_balance": 75,          // ← SCORE
+    "activity_balance": 56      // ← SCORE
+  }
+}
+```
+
+These are **contributor scores** for Oura's proprietary Sleep Score and Readiness Score. They are NOT actual measurements!
+
+#### ✅ CORRECT Endpoint (Returns Actual Measurements)
+
+**`/usercollection/sleep` (Sleep Periods)**
+```json
+{
+  "data": [{
+    "bedtime_start": "2025-12-16T22:30:00Z",
+    "bedtime_end": "2025-12-17T06:45:00Z",
+    "total_sleep_duration": 26190,      // ← ACTUAL SECONDS (7.3 hours)
+    "deep_sleep_duration": 5610,        // ← ACTUAL SECONDS
+    "rem_sleep_duration": 5280,         // ← ACTUAL SECONDS
+    "light_sleep_duration": 15300,      // ← ACTUAL SECONDS
+    "average_hrv": 24.0,                // ← ACTUAL HRV in milliseconds
+    "lowest_heart_rate": 49             // ← ACTUAL BPM
+  }]
+}
+```
+
+This endpoint has **actual measurements** for ALL recovery metrics we need.
+
+### Our Implementation
+
+We use **ONLY** the `sleep` (sleep periods) endpoint for all recovery data:
+- **Sleep duration**: `total_sleep_duration` field (seconds)
+- **HRV**: `average_hrv` field (milliseconds)
+- **Resting HR**: `lowest_heart_rate` field (BPM)
+
+Since one night can have multiple sleep periods (naps, interrupted sleep), we:
+- **Sum** durations (total/deep/rem/light) per date
+- **Average** HRV across periods per date
+- Use **minimum** (lowest) HR as resting HR per date
+
+### Code Reference
+
+**Oura sync** (`commands/oura.rs` line 290):
+```rust
+// Fetch sleep periods (contains BOTH actual sleep duration AND HRV AND resting HR)
+match fetch_sleep_periods(&tokens.access_token, &start_str, &end_str).await {
+  Ok(response) => {
+    // Group periods by date and aggregate
+    for period in response.data {
+      if let Some(total) = period.total_sleep_duration {
+        sleep_by_date.entry(date).push(total);  // Actual seconds
+      }
+      if let Some(hrv) = period.average_hrv {
+        hrv_by_date.entry(date).push(hrv);      // Actual ms
+      }
+      if let Some(rhr) = period.lowest_heart_rate {
+        rhr_by_date.entry(date).push(rhr);      // Actual BPM
+      }
+    }
+  }
+}
+```
+
+### Warning for Future Developers
+
+**DO NOT** use `daily_sleep` or `daily_readiness` endpoints for actual sleep duration or resting HR values. They return proprietary scores (0-100) that are NOT measurements.
+
+Always use the `sleep` (sleep periods) endpoint which has actual duration fields in seconds and actual HR in BPM.

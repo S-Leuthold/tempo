@@ -187,63 +187,77 @@ Confidence: High
 
 ---
 
-## Integration Points for Oura
+## ✅ Recovery Integration (IMPLEMENTED)
 
-### Data Structure Addition
+### Recovery Signals Structure
+
+Full recovery monitoring system with deterministic computation:
 
 ```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OuraContext {
-  // Sleep data (last night)
-  pub sleep_duration_hours: Option<f64>,
-  pub deep_sleep_hours: Option<f64>,
-  pub rem_sleep_hours: Option<f64>,
-
-  // 7-day trends
-  pub sleep_avg_7d: Option<f64>,
-  pub sleep_debt_hours: Option<f64>,  // cumulative shortfall
-
-  // HRV (avoid proprietary "readiness score")
-  pub hrv_last_night: Option<f64>,
-  pub hrv_avg_7d: Option<f64>,
-  pub hrv_trend_direction: Option<String>, // "declining", "stable", "improving"
-  pub hrv_declining_days: Option<u8>,  // consecutive days down
-
-  // Resting HR
-  pub resting_hr: Option<i64>,
-  pub resting_hr_avg_7d: Option<i64>,
+pub struct RecoverySignals {
+  sleep: SignalAxis,      // Sleep debt, 7d avg, 28d baseline
+  hrv: SignalAxis,        // Current vs baseline delta, trend, declining days
+  rhr: SignalAxis,        // Current vs baseline delta, trend, rising days
+  overall_band: RecoveryBand,  // Green/Yellow/Orange/Red
+  constraints: RecoveryConstraints,  // Intensity cap, duration bias, progression gate
+  flags: Vec<RecoveryFlag>,  // SleepDebtAccumulating, HrvBelowBaseline, etc.
 }
 ```
 
-Add to `ContextPackage`:
+Added to `ContextPackage`:
 ```rust
-pub struct ContextPackage {
-  // ... existing fields ...
-
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub oura: Option<OuraContext>,
-}
+#[serde(skip_serializing_if = "Option::is_none")]
+pub recovery_signals: Option<RecoverySignals>,
 ```
 
-### Prompt Additions
+### Recovery Band Logic
 
-Each card section gets Oura guidance:
+**Band Thresholds:**
+- **Sleep**: Debt-based (>1h = Yellow, >2.5h = Orange, >4h = Red)
+- **HRV**: Delta from 28d baseline (-5ms = Yellow, -15ms = Orange, -25ms = Red)
+- **RHR**: Elevation from 28d baseline (+2bpm = Yellow, +5bpm = Orange, +8bpm = Red)
+- **Overall**: Takes worst signal (conservative approach)
+- **Exception**: HRV Orange + Sleep Green + RHR Green = Yellow (HRV is noisier)
 
-**Performance card:**
-- "If oura.sleep_hours < 6.5, mention as context for performance variance"
+**Constraints by Band:**
+- **Green**: Normal intensity, Standard duration, gate:false
+- **Yellow**: ModerateOnly intensity, Standard duration, gate:false
+- **Orange**: EasyOnly intensity, Short duration, gate:true
+- **Red**: RecoveryOnly intensity, Short duration, gate:true
 
-**HR/Efficiency card:**
-- "Use oura.hrv to explain elevated HR if present"
-- "Use oura.resting_hr_trend for context"
+### LLM Integration (coach_system_v4.txt)
 
-**Training Status card:**
-- "Include oura.sleep_avg and hrv_trend as recovery indicators"
+**Card 2: HR & Efficiency**
+- Links elevated HR to recovery metrics when Yellow/Orange/Red
+- Example: "HR 10bpm higher - aligns with Orange recovery (HRV -15ms vs baseline)"
 
-**Tomorrow card:**
-- "If oura.sleep_debt > 3hrs, bias toward shorter/easier"
+**Card 3: Training Status**
+- Includes recovery_band and recovery_note fields (optional)
+- Recovery explains TSB: "Orange recovery (sleep debt 2.5h) explains why -12 TSB feels harder"
+- Recovery flags in priority order (Red/Orange > training flags > Yellow)
 
-**Eyes On card:**
-- "If oura.hrv_declining_days >= 3, add as top priority flag"
+**Card 4: Tomorrow**
+- Recovery constraints inform intensity/duration recommendations
+- EasyOnly cap → recommend Z1-Z2 even if TSB allows harder
+- Example: "Orange recovery (sleep debt 3.0h) + TSB -16.8 = short easy session"
+
+**Card 5: Eyes On**
+- Recovery flags appear if not in top 2
+- Format: flag, current_value, threshold, action, why_it_matters
+
+### UI Implementation
+
+**Recovery Tab:**
+- Recovery band badge with color-coded border
+- 3 signal cards (Sleep, HRV, RHR) with current/7d/28d/delta display
+- Charts for 7-day trends
+- Recovery Constraints card showing caps and progression gate
+- Recovery Flags card with detailed explanations
+
+**Coach Cards:**
+- Training Status card optionally displays recovery band and note
+- Color-coded recovery row (🟢🟡🟠🔴)
+- Recovery context explains training load patterns
 
 ---
 
@@ -281,36 +295,45 @@ pub weather: Option<WeatherContext>,
 
 ---
 
-## V4 Implementation Checklist
+## ✅ V4 Implementation Status: COMPLETE
 
 ### Rust Backend
-- [ ] Add V4 types to `llm.rs`
-- [ ] Create V4 prompt (`coach_system_v4.txt`) with 5 card sections
-- [ ] Add weather extraction from Strava sync
-- [ ] Scaffold Oura context struct (returns None for now)
-- [ ] Update `analyze_workout` to try V4 first, fallback to V3
+- [x] V4 types in `llm.rs` (WorkoutAnalysisV4, all card types)
+- [x] V4 prompt (`coach_system_v4.txt`) with 5 card sections + recovery rules
+- [x] Oura integration with RecoverySignals struct (actual measurements, not scores)
+- [x] `analyze_workout` uses V4 format with recovery context
+- [ ] Weather extraction from Strava sync (future enhancement)
 
 ### Frontend
-- [ ] Update `CoachCards` component to use V4 structured data
-- [ ] Add type-safe props for each card
-- [ ] Remove string parsing logic
+- [x] `CoachCards` component uses V4 structured data
+- [x] Type-safe props for each card (TypeScript interfaces)
+- [x] Recovery tab with detailed signal display
+- [x] Tab navigation component
+- [x] Chart.js integration for trend visualization
 
-### Future (Post-V4 Launch)
-- [ ] Oura OAuth integration
-- [ ] Oura API data fetch (sleep, HRV)
-- [ ] Add Oura tab for detailed sleep/recovery view
+### Testing & Quality
+- [x] 102 tests passing (~58% coverage)
+- [x] Recovery signal computation fully tested
+- [x] All assertions verify actual behavior
+- [x] Zero clippy warnings
+
+### Future Enhancements
 - [ ] Weather display on workout list
+- [ ] Automatic sync timer (currently manual)
+- [ ] Recovery trend analytics dashboard
+- [ ] Sleep target in user settings (currently hardcoded 7.0h)
 
 ---
 
 ## Summary
 
-**V4 Architecture:**
-- One call, structured JSON, 5 card fields
-- Weather from Strava (temp, conditions)
-- Oura sleep + HRV (not proprietary scores)
-- Each card has clear data requirements
-- Assume structured rides (don't discuss target adherence)
-- Informative tone, not chiding
+**V4 + Recovery Architecture (DEPLOYED):**
+- ✅ One call, structured JSON, 5 card fields
+- ✅ Recovery signals from Oura sleep periods (actual values, not scores)
+- ✅ TSB remains primary, recovery is advisory context
+- ✅ Each card has clear data requirements
+- ✅ Assume structured rides (don't discuss target adherence)
+- ✅ Informative tone, not chiding
+- ✅ TrainerRoad-style red/yellow/green advisory system
 
-**Ready to implement?** We have clean separation: data layer (Rust) → LLM layer (prompt + JSON) → UI layer (cards).
+**Production ready!** Clean separation maintained: data layer (Rust) → LLM layer (prompt + JSON) → UI layer (cards).

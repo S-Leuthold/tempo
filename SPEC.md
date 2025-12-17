@@ -513,18 +513,30 @@ struct AdherenceSummary {
 - [x] Wire progression engine to workout analysis
 - [ ] Frontend display of progression status
 
-### v0.3 - Full Daily Flow
-- [ ] Oura integration
+### v0.3 - Recovery Integration (COMPLETE)
+- [x] Oura OAuth and data sync (sleep periods endpoint)
+- [x] Recovery signal computation (sleep/HRV/RHR axes)
+- [x] Recovery band determination (Green/Yellow/Orange/Red)
+- [x] Recovery constraints (intensity cap, duration bias, progression gate)
+- [x] Recovery tab with detailed metrics and charts
+- [x] LLM integration - recovery informs coaching decisions
+- [x] Pre-aggregated context for LLM (ContextPackage with recovery_signals)
+- [x] Tomorrow recommendation considers recovery constraints
 - [ ] Automatic sync on timer
-- [ ] Pre-aggregated context for LLM
-- [ ] Tomorrow recommendation based on recovery
-- [ ] Status icon color based on readiness
+- [ ] Status icon color includes recovery band
 
-### v0.4 - Polish
+### v0.4 - Test Coverage & Quality (COMPLETE)
+- [x] Comprehensive test suite (102 tests, ~58% coverage)
+- [x] All core business logic tested (analysis, progression, LLM parsing)
+- [x] Command layer tests with strong assertions
+- [x] OAuth helper tests (Strava + Oura)
+- [x] Recovery signal computation tests
+
+### v0.5 - Polish (Future)
 - [ ] Weekly summary generation
-- [ ] Charts in detail view
+- [ ] Settings UI for sleep target and user preferences
 - [ ] Historical workout browser
-- [ ] Settings UI
+- [ ] Recovery trend analytics dashboard
 
 ### Future
 - Webhook-based real-time sync

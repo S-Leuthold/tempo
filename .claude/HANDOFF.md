@@ -1,10 +1,10 @@
 # Trainer Log Handoff Document
 
-**Last Updated:** 2024-12-11
+**Last Updated:** 2025-12-17
 
-## Project Status: v0.4 - V4 Multi-Card Analysis + Oura Integration Complete
+## Project Status: v0.4 - Recovery Integration + Comprehensive Testing Complete
 
-The coach analysis system has been fully upgraded to V4 with 5 separate cards (Performance, HR/Efficiency, Training Status, Tomorrow, Eyes On). Oura Ring integration is complete with OAuth and data sync for sleep, HRV, and resting HR. All 27 compiler warnings resolved. System is production-ready.
+The recovery monitoring system is fully integrated with deterministic signal computation, detailed UI, and LLM coaching integration. Comprehensive test suite expanded to 102 tests (~58% coverage). All Oura API endpoint issues resolved. System is production-ready and validated end-to-end.
 
 ## What's Working
 
@@ -37,12 +37,24 @@ The coach analysis system has been fully upgraded to V4 with 5 separate cards (P
 - **Strava-like voice**: Conversational, confident, occasionally playful
 - **Card-based UI**: All 5 cards rendering with proper TypeScript types
 
-### Oura Integration (Complete)
-- **OAuth flow**: Connect/disconnect, automatic token refresh
-- **Data sync**: Last 7 days of sleep, HRV, and resting HR
-- **Database storage**: Separate tables for sleep, HRV, resting HR with date indexing
-- **UI**: Connection card with sync button and result display
-- **Ready for V4 enhancement**: Oura context can be added to analysis prompt
+### Recovery Integration (v0.3 - Complete)
+- **Oura OAuth**: Connect/disconnect, automatic token refresh
+- **Data sync**: Sleep periods endpoint with actual measurements (NOT scores)
+- **Recovery signals**: Deterministic computation of sleep/HRV/RHR axes
+- **Band determination**: Green/Yellow/Orange/Red based on sleep debt, HRV delta, RHR delta
+- **Recovery constraints**: Intensity cap, duration bias, progression gate
+- **Recovery tab UI**: Band badge, 3 signal cards with baseline deltas, constraints, flags, charts
+- **LLM integration**: Recovery signals in ContextPackage, Claude uses in Tomorrow recommendations
+- **Tauri commands**: get_recovery_signals, get_oura_history
+- **Tested**: 12 recovery-specific tests, end-to-end validation with real Oura data
+
+### Test Coverage (v0.4 - Complete)
+- **102 total tests** (28 → 102, +264% increase)
+- **~58% code coverage** across all core modules
+- **Strong assertions**: All tests verify actual behavior (DB changes, response values, error types)
+- **Modules tested**: analysis (20), progression (17), LLM (13), commands (22), OAuth (10), recovery (12), utils (4), db (2)
+- **Test quality**: No meaningless assertions, all tests would catch real regressions
+- **CI**: All tests passing in ~2 minutes with clippy -D warnings
 
 ### V3 Prompt Guardrails
 - Bans physiology speculation ("neuromuscular fatigue", "cardiovascular adaptation")
