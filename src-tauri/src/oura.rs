@@ -601,18 +601,26 @@ use crate::db::DbPool;
 use crate::models::recovery::{OuraBaseline, OuraDay};
 
 /// Get most recent Oura day with all metrics joined
+/// Uses CTE pattern to ensure days with only HRV or RHR data are included
 pub async fn get_most_recent_oura_day(pool: &DbPool) -> Result<OuraDay, OuraError> {
   let query = "
+    WITH all_dates AS (
+      SELECT date FROM oura_sleep
+      UNION
+      SELECT date FROM oura_hrv
+      UNION
+      SELECT date FROM oura_resting_hr
+    )
     SELECT
-      COALESCE(s.date, h.date, r.date) as date,
+      d.date,
       CAST(s.total_sleep_seconds AS REAL) / 3600.0 as sleep_hours,
       h.average_hrv_ms,
       CAST(r.resting_hr AS REAL) as resting_hr_bpm
-    FROM oura_sleep s
-    LEFT JOIN oura_hrv h ON s.date = h.date
-    LEFT JOIN oura_resting_hr r ON s.date = r.date
-    WHERE s.date IS NOT NULL OR h.date IS NOT NULL OR r.date IS NOT NULL
-    ORDER BY COALESCE(s.date, h.date, r.date) DESC
+    FROM all_dates d
+    LEFT JOIN oura_sleep s ON d.date = s.date
+    LEFT JOIN oura_hrv h ON d.date = h.date
+    LEFT JOIN oura_resting_hr r ON d.date = r.date
+    ORDER BY d.date DESC
     LIMIT 1
   ";
 

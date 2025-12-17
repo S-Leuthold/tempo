@@ -11,6 +11,29 @@ use std::sync::Arc;
 use tauri::State;
 
 /// ---------------------------------------------------------------------------
+/// Type Aliases for Database Query Results
+/// ---------------------------------------------------------------------------
+
+type WorkoutSummaryRow = (String, String, Option<i64>, Option<f64>, Option<String>);
+type WorkoutDetailRow = (
+  i64, String, String, Option<i64>, Option<f64>, Option<i64>,
+  Option<f64>, Option<f64>, Option<f64>, Option<String>,
+);
+type AnalysisRow = (i64, i64, String, String, Option<String>, Option<String>, String);
+type RecentWorkoutRow = (
+  String, String, Option<i64>, Option<f64>, Option<i64>,
+  Option<f64>, Option<f64>, Option<f64>,
+);
+type UncomputedWorkoutRow = (i64, String, Option<i64>, Option<f64>, Option<i64>, Option<f64>);
+type WorkoutWithMetricsRow = (
+  i64, String, String, String, Option<i64>, Option<f64>,
+  Option<i64>, Option<f64>, Option<f64>,
+  Option<f64>, Option<f64>, Option<f64>, Option<f64>,
+  Option<f64>, Option<f64>, Option<String>,
+);
+type UserSettingsRow = (Option<i64>, Option<i64>, Option<i64>, i64);
+
+/// ---------------------------------------------------------------------------
 /// User Settings Commands
 /// ---------------------------------------------------------------------------
 
@@ -18,7 +41,7 @@ use tauri::State;
 pub async fn get_user_settings(
   state: State<'_, Arc<AppState>>,
 ) -> Result<UserSettings, String> {
-  let row: Option<(Option<i64>, Option<i64>, Option<i64>, i64)> = sqlx::query_as(
+  let row: Option<UserSettingsRow> = sqlx::query_as(
     "SELECT max_hr, lthr, ftp, training_days_per_week FROM user_settings WHERE id = 1",
   )
   .fetch_optional(&state.db)
@@ -79,7 +102,7 @@ pub async fn compute_workout_metrics(
   let settings = get_user_settings(state.clone()).await?;
 
   // Find workouts without computed metrics
-  let workouts: Vec<(i64, String, Option<i64>, Option<f64>, Option<i64>, Option<f64>)> =
+  let workouts: Vec<UncomputedWorkoutRow> =
     sqlx::query_as(
       r#"
       SELECT id, activity_type, duration_seconds, distance_meters,
@@ -179,12 +202,7 @@ pub async fn get_workouts_with_metrics(
 
   println!("Fetching workouts with limit: {}", limit);
 
-  let rows: Vec<(
-    i64, String, String, String, Option<i64>, Option<f64>,
-    Option<i64>, Option<f64>, Option<f64>,
-    Option<f64>, Option<f64>, Option<f64>, Option<f64>,
-    Option<f64>, Option<f64>, Option<String>,
-  )> = sqlx::query_as(
+  let rows: Vec<WorkoutWithMetricsRow> = sqlx::query_as(
     r#"
     SELECT
       id, strava_id, activity_type, started_at,
@@ -248,7 +266,7 @@ pub async fn get_training_context(
   let settings = get_user_settings(state.clone()).await?;
 
   // Fetch workouts from last 42 days (needed for CTL calculation)
-  let rows: Vec<(String, String, Option<i64>, Option<f64>, Option<String>)> = sqlx::query_as(
+  let rows: Vec<WorkoutSummaryRow> = sqlx::query_as(
     r#"
     SELECT
       started_at,
@@ -349,18 +367,7 @@ pub async fn analyze_workout(
   workout_id: i64,
 ) -> Result<WorkoutAnalysisResult, AnalysisError> {
   // Get the workout data
-  let workout: Option<(
-    i64,
-    String,
-    String,
-    Option<i64>,
-    Option<f64>,
-    Option<i64>,
-    Option<f64>,
-    Option<f64>,
-    Option<f64>,
-    Option<String>,
-  )> = sqlx::query_as(
+  let workout: Option<WorkoutDetailRow> = sqlx::query_as(
     r#"
     SELECT
       id, activity_type, started_at, duration_seconds,
@@ -542,7 +549,7 @@ pub async fn get_workout_analysis(
   state: State<'_, Arc<AppState>>,
   workout_id: i64,
 ) -> Result<Option<StoredWorkoutAnalysis>, String> {
-  let row: Option<(i64, i64, String, String, Option<String>, Option<String>, String)> =
+  let row: Option<AnalysisRow> =
     sqlx::query_as(
       r#"
       SELECT id, workout_id, summary, tomorrow_recommendation,
@@ -582,7 +589,7 @@ pub async fn get_workout_analysis(
 pub async fn get_latest_analysis(
   state: State<'_, Arc<AppState>>,
 ) -> Result<Option<StoredWorkoutAnalysis>, String> {
-  let row: Option<(i64, i64, String, String, Option<String>, Option<String>, String)> =
+  let row: Option<AnalysisRow> =
     sqlx::query_as(
       r#"
       SELECT wa.id, wa.workout_id, wa.summary, wa.tomorrow_recommendation,
@@ -622,7 +629,7 @@ pub async fn get_latest_analysis(
 async fn get_workout_summaries(
   db: &crate::db::DbPool,
 ) -> Result<Vec<WorkoutSummary>, sqlx::Error> {
-  let rows: Vec<(String, String, Option<i64>, Option<f64>, Option<String>)> = sqlx::query_as(
+  let rows: Vec<WorkoutSummaryRow> = sqlx::query_as(
     r#"
     SELECT started_at, activity_type, duration_seconds,
            CAST(rtss AS REAL), hr_zone
@@ -678,10 +685,7 @@ async fn get_recent_same_type_workouts(
   exclude_workout_id: i64,
   limit: i32,
 ) -> Result<Vec<RecentWorkoutSummary>, String> {
-  let rows: Vec<(
-    String, String, Option<i64>, Option<f64>, Option<i64>,
-    Option<f64>, Option<f64>, Option<f64>,
-  )> = sqlx::query_as(
+  let rows: Vec<RecentWorkoutRow> = sqlx::query_as(
     r#"
     SELECT
       started_at,
@@ -737,10 +741,7 @@ async fn get_recent_all_workouts(
   exclude_workout_id: i64,
   limit: i32,
 ) -> Result<Vec<RecentWorkoutSummary>, String> {
-  let rows: Vec<(
-    String, String, Option<i64>, Option<f64>, Option<i64>,
-    Option<f64>, Option<f64>, Option<f64>,
-  )> = sqlx::query_as(
+  let rows: Vec<RecentWorkoutRow> = sqlx::query_as(
     r#"
     SELECT
       started_at,

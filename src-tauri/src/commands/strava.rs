@@ -10,6 +10,12 @@ use std::sync::Arc;
 use tauri::State;
 
 /// ---------------------------------------------------------------------------
+/// Type Aliases for Database Query Results
+/// ---------------------------------------------------------------------------
+
+type StravaTokenRow = (Option<String>, Option<String>, Option<chrono::DateTime<Utc>>);
+
+/// ---------------------------------------------------------------------------
 /// Start OAuth Flow
 /// ---------------------------------------------------------------------------
 
@@ -158,7 +164,7 @@ async fn save_tokens(db: &crate::db::DbPool, tokens: &StravaTokens) -> Result<()
 }
 
 async fn load_tokens(db: &crate::db::DbPool) -> Result<Option<StravaTokens>, StravaError> {
-  let row: Option<(Option<String>, Option<String>, Option<chrono::DateTime<Utc>>)> = sqlx::query_as(
+  let row: Option<StravaTokenRow> = sqlx::query_as(
     "SELECT access_token, refresh_token, token_expires_at
              FROM sync_state WHERE source = 'strava'",
   )

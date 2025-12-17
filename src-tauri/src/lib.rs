@@ -1,3 +1,7 @@
+#![allow(clippy::empty_line_after_doc_comments)]
+#![allow(clippy::empty_line_after_outer_attr)]
+#![allow(clippy::too_many_arguments)]
+
 mod analysis;
 mod db;
 mod llm;
