@@ -290,7 +290,15 @@ pub async fn oura_sync_data(
   // Fetch daily sleep data
   match fetch_daily_sleep(&tokens.access_token, &start_str, &end_str).await {
     Ok(response) => {
+      println!("DEBUG: Received {} sleep records from Oura API", response.data.len());
       for sleep_data in response.data {
+        println!("DEBUG: Sleep for {}: total={}s, deep={}s, rem={}s, light={}s",
+          sleep_data.day,
+          sleep_data.contributors.total_sleep.unwrap_or(0),
+          sleep_data.contributors.deep_sleep.unwrap_or(0),
+          sleep_data.contributors.rem_sleep.unwrap_or(0),
+          sleep_data.contributors.light_sleep.unwrap_or(0)
+        );
         save_sleep_data(&state.db, &sleep_data.day, &sleep_data).await?;
         sleep_count += 1;
       }
